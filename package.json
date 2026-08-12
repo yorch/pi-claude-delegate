@@ -48,6 +48,7 @@
   "pi": {
     "extensions": [
       "./extensions/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/yorch/pi-claude-delegate/main/docs/assets/claude-delegate-preview.png"
   }
 }
