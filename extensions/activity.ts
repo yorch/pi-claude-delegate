@@ -12,6 +12,55 @@ export function safeSegmentName(name: string): string {
 	return safe.length > 0 ? safe : "delegate";
 }
 
+export interface MetricsInput {
+	numTurns: number;
+	totalCostUsd: number;
+	promptTokens: number;
+	contextPercent: number | null;
+	durationMs: number | null;
+}
+
+/** Compact run summary: `3 turn(s) · $0.54 · 62k tok · 6.2% ctx · 12s`. */
+export function formatMetrics(m: MetricsInput): string {
+	const parts: Array<string | null> = [
+		`${m.numTurns} turn(s)`,
+		`$${m.totalCostUsd.toFixed(3)}`,
+		m.promptTokens > 0 ? `${Math.round(m.promptTokens / 1000)}k tok` : null,
+		typeof m.contextPercent === "number" ? `${m.contextPercent.toFixed(1)}% ctx` : null,
+		typeof m.durationMs === "number" && m.durationMs !== null ? `${(m.durationMs / 1000).toFixed(0)}s` : null,
+	];
+	return parts.filter((p): p is string => Boolean(p)).join(" · ");
+}
+
+/** Parse the metadata header of a transcript file (without loading the whole body). */
+export function parseTranscriptMeta(head: string): { mode: string; cost: number; sessionId: string | null } {
+	let mode = "delegate";
+	let cost = 0;
+	let sessionId: string | null = null;
+	const mm = /^# Delegated Claude run — (.+)$/m.exec(head);
+	if (mm) mode = mm[1];
+	const cm = /\bcost: \$([\d.]+)/.exec(head);
+	if (cm) cost = Number(cm[1]);
+	const sm = /\bsession: ([0-9a-f-]+)/.exec(head);
+	if (sm) sessionId = sm[1];
+	return { mode, cost, sessionId };
+}
+
+/** Build the markdown report content injected into the session on the next turn. */
+export function buildReportContent(opts: {
+	mode: string;
+	metrics: string;
+	body: string;
+	file?: string;
+	sessionId?: string;
+}): string {
+	const header = `## claude ${opts.mode} (${opts.metrics})`;
+	const foot: string[] = [];
+	if (opts.file) foot.push(`transcript: ${opts.file}`);
+	if (opts.sessionId) foot.push(`resume: \`/claude --resume=${opts.sessionId} <prompt>\``);
+	return [header, "", opts.body, foot.length > 0 ? `\n_${foot.join(" · ")}_` : ""].join("\n");
+}
+
 /** Delete oldest transcript files beyond `maxCount` (0 = keep everything). */
 export function pruneOutputs(dir: string, maxCount: number): void {
 	if (maxCount <= 0) return;

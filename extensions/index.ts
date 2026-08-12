@@ -38,7 +38,16 @@ import { delegationHint, stripMarker } from "./hint.ts";
 import { progressWindow } from "./progress.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
-import { buildTranscript, collectActivityLog, formatToolUse, pruneOutputs, safeSegmentName } from "./activity.ts";
+import {
+	buildReportContent,
+	buildTranscript,
+	collectActivityLog,
+	formatMetrics,
+	formatToolUse,
+	parseTranscriptMeta,
+	pruneOutputs,
+	safeSegmentName,
+} from "./activity.ts";
 import type { ActivityEvent } from "./stream-parse.ts";
 
 interface DelegateConfig {
@@ -203,13 +212,10 @@ function readHistory(dir: string): HistoryEntry[] {
 				let cost = 0;
 				let sessionId: string | null = null;
 				try {
-					const head = readFileSync(file, "utf8").slice(0, 2000);
-					const mm = /^# Delegated Claude run — (.+)$/m.exec(head);
-					if (mm) mode = mm[1];
-					const cm = /\bcost: \$([\d.]+)/.exec(head);
-					if (cm) cost = Number(cm[1]);
-					const sm = /\bsession: ([0-9a-f-]+)/.exec(head);
-					if (sm) sessionId = sm[1];
+					const meta = parseTranscriptMeta(readFileSync(file, "utf8").slice(0, 2000));
+					mode = meta.mode;
+					cost = meta.cost;
+					sessionId = meta.sessionId;
 				} catch {
 					// unreadable — keep defaults
 				}
@@ -524,13 +530,8 @@ function injectReport(
 	_ctx: ExtensionContext,
 	opts: { mode: string; metrics: string; body: string; file?: string; sessionId?: string },
 ): void {
-	const header = `## claude ${opts.mode} (${opts.metrics})`;
-	const foot: string[] = [];
-	if (opts.file) foot.push(`transcript: ${opts.file}`);
-	if (opts.sessionId) foot.push(`resume: \`/claude --resume=${opts.sessionId} <prompt>\``);
-	const content = [header, "", opts.body, foot.length > 0 ? `\n_${foot.join(" · ")}_` : ""].join("\n");
 	pendingReport = {
-		content,
+		content: buildReportContent(opts),
 		details: { mode: opts.mode, file: opts.file, sessionId: opts.sessionId, metrics: opts.metrics },
 	};
 }
@@ -914,17 +915,13 @@ export default function (pi: ExtensionAPI) {
 			const promptTokens = usage
 				? (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0)
 				: 0;
-			const metrics = [
-				`${(details.numTurns as number) ?? 0} turn(s)`,
-				`$${((details.totalCostUsd as number) ?? 0).toFixed(3)}`,
-				promptTokens > 0 ? `${Math.round(promptTokens / 1000)}k tok` : null,
-				typeof details.contextPercent === "number" ? `${(details.contextPercent as number).toFixed(1)}% ctx` : null,
-				typeof details.durationMs === "number" && details.durationMs !== null
-					? `${((details.durationMs as number) / 1000).toFixed(0)}s`
-					: null,
-			]
-				.filter((p): p is string => Boolean(p))
-				.join(" · ");
+			const metrics = formatMetrics({
+				numTurns: (details.numTurns as number) ?? 0,
+				totalCostUsd: (details.totalCostUsd as number) ?? 0,
+				promptTokens,
+				contextPercent: typeof details.contextPercent === "number" ? (details.contextPercent as number) : null,
+				durationMs: typeof details.durationMs === "number" && details.durationMs !== null ? (details.durationMs as number) : null,
+			});
 
 			// inject the report into the session so the main agent consumes it
 			// on its next turn (participates in LLM context; full text in the file)
