@@ -24,6 +24,7 @@ import { Container, Markdown, Text, type Component } from "@earendil-works/pi-tu
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
 import { parseClaudeCommand, resolveDefaults } from "./command.ts";
 import { delegationHint, stripMarker } from "./hint.ts";
+import { progressWindow } from "./progress.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
 import { buildTranscript, collectActivityLog, formatToolUse, safeSegmentName } from "./activity.ts";
@@ -83,6 +84,29 @@ function loadConfig(): DelegateConfig {
 		// invalid settings — fall back to defaults
 	}
 	return cfg;
+}
+
+/**
+ * Call a close callback once it becomes available (the overlay may still be
+ * mounting when the run finishes), with a hard cap so we never spin forever.
+ */
+async function closeWhenMounted(getClose: () => (() => void) | null, capMs: number): Promise<void> {
+	const close = getClose();
+	if (close) {
+		close();
+		return;
+	}
+	await new Promise<void>((resolve) => {
+		const start = Date.now();
+		const timer = setInterval(() => {
+			const fn = getClose();
+			if (fn || Date.now() - start > capMs) {
+				clearInterval(timer);
+				fn?.();
+				resolve();
+			}
+		}, 20);
+	});
 }
 
 function outputsDir(): string {
@@ -478,11 +502,18 @@ export default function (pi: ExtensionAPI) {
 			}
 			const { mode } = parsed;
 
-			if (ctx.hasUI) {
-				ctx.ui.setStatus("claude-delegate", ctx.ui.theme.fg("accent", "●") + ctx.ui.theme.fg("dim", ` claude ${mode ?? ""} running…`));
-			}
+			// shared live state for the footer chip and the progress window
+			const feed: string[] = [];
+			let thinkingChars = 0;
+			let liveTail = "";
+			let requestRender: (() => void) | null = null;
+			const getLines = () => {
+				const lines = [...feed.slice(-12)];
+				if (thinkingChars > 0) lines.push("💭 thinking…");
+				if (liveTail) lines.push(`✍ ${liveTail.slice(-200)}`);
+				return lines;
+			};
 
-			// live chip: latest activity shown in the footer while the run streams
 			let chipActivity = "";
 			let chipLastPush = 0;
 			const pushChip = () => {
@@ -495,65 +526,121 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.setStatus("claude-delegate", theme.fg("accent", "●") + theme.fg("dim", ` claude ${mode ?? "general"}`) + activity);
 			};
 
-			try {
-				const { content, details } = await delegate(pi, ctx, {
-					task: resolved.task,
-					mode: parsed.mode,
-					scope: resolved.scope,
-					model: parsed.model,
-					maxBudgetUsd: parsed.budget,
-					sessionId: parsed.sessionId,
-					onStream: () => pushChip(),
-					onActivity: (ev) => {
-						if (ev.kind === "tool_input") {
-							chipActivity = `▶ ${formatToolUse(ev.name, ev.input)}`;
-						} else if (ev.kind === "tool_result") {
-							if (chipActivity.startsWith("▶")) chipActivity += ev.isError ? " ✗" : " ✓";
-						} else if (ev.kind === "thinking") {
-							chipActivity = "💭 thinking…";
-						}
-						pushChip();
-					},
-				});
-
-				const summary = summarize(content);
-				const file = (details.file as string) ?? null;
-				const sessionId = (details.sessionId as string) ?? null;
-				const resumeHint = sessionId ? ` · resume: /claude --resume=${sessionId} <prompt>` : "";
-				const duration =
-					typeof details.durationMs === "number" && details.durationMs !== null
-						? ` · ${((details.durationMs as number) / 1000).toFixed(1)}s`
-						: "";
-
-				// inject the report into the session so the main agent consumes it
-				// on its next turn (participates in LLM context; full text in the file)
-				injectReport(ctx, {
-					mode: details.mode as string,
-					turns: (details.numTurns as number) ?? 0,
-					cost: (details.totalCostUsd as number) ?? 0,
-					body: summary.text,
-					file: file ?? undefined,
-					sessionId: sessionId ?? undefined,
-				});
-
-				if (ctx.hasUI) {
-					ctx.ui.setStatus("claude-delegate", undefined);
-					ctx.ui.notify(
-						`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s)${duration}, $${((details.totalCostUsd as number) ?? 0).toFixed(3)}${resumeHint}` +
-							` · transcript: ${file}`,
-						"info",
-					);
-				} else {
-					process.stdout.write(`${summary.text}\n`);
+			const onActivity = (ev: ActivityEvent) => {
+				if (ev.kind === "tool_input") {
+					chipActivity = `▶ ${formatToolUse(ev.name, ev.input)}`;
+					feed.push(chipActivity);
+					if (feed.length > 40) feed.splice(0, feed.length - 40);
+				} else if (ev.kind === "tool_result") {
+					if (chipActivity.startsWith("▶")) chipActivity += ev.isError ? " ✗" : " ✓";
+					const last = feed.length - 1;
+					if (last >= 0 && feed[last].startsWith("▶")) feed[last] += ev.isError ? " ✗" : " ✓";
+				} else if (ev.kind === "thinking") {
+					chipActivity = "💭 thinking…";
+					thinkingChars += ev.chars;
 				}
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
+				pushChip();
+				requestRender?.();
+			};
+
+			const ac = new AbortController();
+			let cancelled = false;
+			const runState: { error: Error | null } = { error: null };
+
+			// start the run now (not awaited) so the window can render while it streams
+			const run = delegate(pi, ctx, {
+				task: resolved.task,
+				mode: parsed.mode,
+				scope: resolved.scope,
+				model: parsed.model,
+				maxBudgetUsd: parsed.budget,
+				sessionId: parsed.sessionId,
+				signal: ac.signal,
+				onStream: (t) => {
+					liveTail = (liveTail + t).slice(-400);
+					requestRender?.();
+				},
+				onActivity,
+			}).catch((err: unknown) => {
+				runState.error = err instanceof Error ? err : new Error(String(err));
+				return null;
+			});
+
+			// progress window (overlay) while the run streams; ESC cancels
+			let closeWindow: (() => void) | null = null;
+			let result: Awaited<ReturnType<typeof delegate>> | null = null;
+			if (ctx.hasUI) {
+				const uiPromise = ctx.ui
+					.custom(
+						(tui, theme, _kb, done) => {
+							requestRender = () => tui.requestRender();
+							closeWindow = () => done(undefined);
+							return progressWindow(tui, theme, {
+								getLines,
+								onCancel: () => {
+									cancelled = true;
+									ac.abort();
+								},
+							});
+						},
+						{
+							overlay: true,
+							overlayOptions: { width: "70%", maxHeight: "60%", anchor: "top-center" },
+							onHandle: (h) => h.focus(),
+						},
+					)
+					.catch(() => {
+						// window failed to open — footer chip still shows progress
+					});
+
+				result = await run;
+				await closeWhenMounted(() => closeWindow, 2000);
+				await uiPromise;
+			} else {
+				result = await run;
+			}
+
+			if (cancelled || !result) {
+				if (ctx.hasUI) ctx.ui.setStatus("claude-delegate", undefined);
+				const message = runState.error ? runState.error.message : cancelled ? "cancelled" : "delegation failed";
 				if (ctx.hasUI) {
-					ctx.ui.setStatus("claude-delegate", undefined);
-					ctx.ui.notify(`claude delegate failed: ${message}`, "error");
+					ctx.ui.notify(`claude delegate ${cancelled ? "cancelled" : "failed"}: ${message}`, cancelled ? "warning" : "error");
 				} else {
 					process.stderr.write(`${message}\n`);
 				}
+				return;
+			}
+			const { content, details } = result;
+
+			const summary = summarize(content);
+			const file = (details.file as string) ?? null;
+			const sessionId = (details.sessionId as string) ?? null;
+			const resumeHint = sessionId ? ` · resume: /claude --resume=${sessionId} <prompt>` : "";
+			const duration =
+				typeof details.durationMs === "number" && details.durationMs !== null
+					? ` · ${((details.durationMs as number) / 1000).toFixed(1)}s`
+					: "";
+
+			// inject the report into the session so the main agent consumes it
+			// on its next turn (participates in LLM context; full text in the file)
+			injectReport(ctx, {
+				mode: details.mode as string,
+				turns: (details.numTurns as number) ?? 0,
+				cost: (details.totalCostUsd as number) ?? 0,
+				body: summary.text,
+				file: file ?? undefined,
+				sessionId: sessionId ?? undefined,
+			});
+
+			if (ctx.hasUI) {
+				ctx.ui.setStatus("claude-delegate", undefined);
+				ctx.ui.notify(
+					`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s)${duration}, $${((details.totalCostUsd as number) ?? 0).toFixed(3)}${resumeHint}` +
+						` · transcript: ${file}`,
+					"info",
+				);
+			} else {
+				process.stdout.write(`${summary.text}\n`);
 			}
 		},
 	});
