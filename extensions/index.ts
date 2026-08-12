@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
+import { parseClaudeCommand } from "./command.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
 
@@ -252,32 +253,32 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Command ──────────────────────────────────────────────────────────────
 	pi.registerCommand("claude", {
-		description:
-			"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] <prompt>",
+			description:
+				"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] <prompt> — or use a mode name as the first word: /claude review <prompt>",
 		handler: async (args, ctx) => {
-			// parse --key=value flags, rest is the prompt
-			const flags: Record<string, string> = {};
-			const rest = args.replace(/--([a-zA-Z-]+)=(\S+)/g, (_m, k: string, v: string) => {
-				flags[k] = v;
-				return "";
-			});
-			const task = rest.trim();
+			const parsed = parseClaudeCommand(args, new Set(loadTemplates(ctx.cwd).keys()));
+			const { task, mode } = parsed;
+
 			if (!task) {
-				ctx.ui.notify?.("Usage: /claude [--mode=…] [--model=…] [--scope=…] <prompt>", "warning");
+				if (mode) {
+					ctx.ui.notify?.(`/claude ${mode} <what to do> — give a prompt for the "${mode}" mode`, "warning");
+				} else {
+					ctx.ui.notify?.("Usage: /claude [--mode=…] [--model=…] [--scope=…] <prompt>", "warning");
+				}
 				return;
 			}
 
 			if (ctx.hasUI) {
-				ctx.ui.setStatus("claude-delegate", ctx.ui.theme.fg("accent", "●") + ctx.ui.theme.fg("dim", ` claude ${flags.mode ?? ""} running…`));
+				ctx.ui.setStatus("claude-delegate", ctx.ui.theme.fg("accent", "●") + ctx.ui.theme.fg("dim", ` claude ${mode ?? ""} running…`));
 			}
 
 			try {
 				const { content, details } = await delegate(pi, ctx, {
 					task,
-					mode: flags.mode,
-					scope: flags.scope,
-					model: flags.model,
-					maxBudgetUsd: flags.budget ? Number(flags.budget) : undefined,
+					mode: parsed.mode,
+					scope: parsed.scope,
+					model: parsed.model,
+					maxBudgetUsd: parsed.budget,
 				});
 
 				const summary = summarize(content);
