@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text, type Component, type OverlayHandle } from "@earendil-works/pi-tui";
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
 import { parseClaudeCommand, resolveDefaults } from "./command.ts";
 import { delegationHint, stripMarker } from "./hint.ts";
@@ -296,6 +296,10 @@ function injectReport(
 }
 
 export default function (pi: ExtensionAPI) {
+	// state for the progress window: allow minimizing + re-showing while a run streams
+	let activeRunId = 0;
+	let activeOverlay: { show(): void; focus(): void; runId: number } | null = null;
+
 	// ── Tool ─────────────────────────────────────────────────────────────────
 	pi.registerTool({
 		name: "claude_delegate",
@@ -488,6 +492,18 @@ export default function (pi: ExtensionAPI) {
 			description:
 				"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] [--resume=<session-id>] <prompt> — or use a mode name as the first word: /claude review <prompt>",
 		handler: async (args, ctx) => {
+			// subcommands: re-show a minimized progress window
+			const sub = args.trim();
+			if (sub === "watch" || sub === "show") {
+				if (activeOverlay) {
+					activeOverlay.show();
+					activeOverlay.focus();
+				} else {
+					ctx.ui.notify?.("No active claude run to show — start one with /claude <mode> <prompt>", "info");
+				}
+				return;
+			}
+
 			const templates = loadTemplates(ctx.cwd);
 			const parsed = parseClaudeCommand(args, new Set(templates.keys()));
 			const resolved = resolveDefaults(parsed, templates);
@@ -546,6 +562,10 @@ export default function (pi: ExtensionAPI) {
 			const ac = new AbortController();
 			let cancelled = false;
 			const runState: { error: Error | null } = { error: null };
+			const runId = ++activeRunId;
+			const clearActive = () => {
+				if (activeOverlay?.runId === runId) activeOverlay = null;
+			};
 
 			// start the run now (not awaited) so the window can render while it streams
 			const run = delegate(pi, ctx, {
@@ -566,10 +586,11 @@ export default function (pi: ExtensionAPI) {
 				return null;
 			});
 
-			// progress window (overlay) while the run streams; ESC cancels
+			// progress window (overlay) while the run streams; ESC cancels, m minimizes
 			let closeWindow: (() => void) | null = null;
 			let result: Awaited<ReturnType<typeof delegate>> | null = null;
 			if (ctx.hasUI) {
+				let overlayHandle: OverlayHandle | null = null;
 				const uiPromise = ctx.ui
 					.custom(
 						(tui, theme, _kb, done) => {
@@ -581,12 +602,25 @@ export default function (pi: ExtensionAPI) {
 									cancelled = true;
 									ac.abort();
 								},
+								onMinimize: () => {
+									// hide the window, keep the delegation running in the background
+									overlayHandle?.setHidden(true);
+									overlayHandle?.unfocus();
+								},
 							});
 						},
 						{
 							overlay: true,
 							overlayOptions: { width: "70%", maxHeight: "60%", anchor: "top-center" },
-							onHandle: (h) => h.focus(),
+							onHandle: (h) => {
+								overlayHandle = h;
+								activeOverlay = {
+									show: () => h.setHidden(false),
+									focus: () => h.focus(),
+									runId,
+								};
+								h.focus();
+							},
 						},
 					)
 					.catch(() => {
@@ -599,6 +633,7 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				result = await run;
 			}
+			clearActive();
 
 			if (cancelled || !result) {
 				if (ctx.hasUI) ctx.ui.setStatus("claude-delegate", undefined);

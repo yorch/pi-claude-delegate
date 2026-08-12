@@ -15,6 +15,8 @@ export interface ProgressWindowOptions {
 	getLines: () => string[];
 	/** Called when the user presses ESC. */
 	onCancel: () => void;
+	/** Called when the user presses `m` (minimize — hide the window, keep the run going). */
+	onMinimize: () => void;
 }
 
 /** Create the overlay component; disposes the spinner timer. */
@@ -30,11 +32,15 @@ export function progressWindow(tui: TUI, theme: Theme, opts: ProgressWindowOptio
 			const header = theme.fg("accent", `${SPINNER[frame % SPINNER.length]} claude delegate`);
 			const lines = opts.getLines();
 			const body = lines.slice(-12).map((l) => theme.fg("muted", truncateToWidth(l, width)));
-			const hint = theme.fg("dim", "esc to cancel");
+			const hint = theme.fg("dim", "esc cancel · m minimize");
 			return [header, ...body, "", hint];
 		},
 		handleInput(data: string): void {
-			if (matchesKey(data, Key.escape)) opts.onCancel();
+			if (matchesKey(data, Key.escape)) {
+				opts.onCancel();
+			} else if (data === "m") {
+				opts.onMinimize();
+			}
 		},
 		invalidate(): void {
 			// stateless render — nothing to clear
