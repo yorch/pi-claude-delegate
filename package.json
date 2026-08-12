@@ -1,6 +1,6 @@
 {
   "name": "@yorch/pi-claude-delegate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Delegate work to Claude Code from the pi coding agent \u2014 code reviews, plans, implementation, security audits, docs, or your own custom templates.",
   "type": "module",
   "files": [

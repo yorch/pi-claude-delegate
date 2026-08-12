@@ -14,7 +14,7 @@ Development and release notes for `@yorch/pi-claude-delegate`.
 ```bash
 npm install
 npm run typecheck   # tsc --noEmit
-npm test            # node:test + strip-types, 8 tests
+npm test            # node:test + strip-types, 14 tests
 ```
 
 CI runs both on every push.

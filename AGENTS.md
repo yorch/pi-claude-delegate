@@ -14,7 +14,7 @@ ships as an npm package (`pi-package` keyword), installable with
 | Command | What it does |
 | --- | --- |
 | `npm run typecheck` | `tsc --noEmit` over `extensions/` (strict, `allowImportingTsExtensions`) |
-| `npm test` | `node --experimental-strip-types --test tests/**/*.test.ts` (8 tests, node:test) |
+| `npm test` | `node --experimental-strip-types --test tests/**/*.test.ts` (14 tests, node:test) |
 | `npm publish --access public` | Publish to npm (scoped → the flag is mandatory) |
 | `pi -e <path> -p "…" --no-tools` | Load the local package as a temporary extension; smoke-tests manifest + factory |
 
