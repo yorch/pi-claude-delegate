@@ -20,6 +20,9 @@ test("extracts text deltas and the final result", () => {
 			num_turns: 1,
 			total_cost_usd: 0.01,
 			session_id: "abc",
+			duration_ms: 2500,
+			ttft_ms: 400,
+			modelUsage: { "claude-sonnet-5": { contextWindow: 1000000, maxOutputTokens: 64000 } },
 			usage: {
 				input_tokens: 1,
 				output_tokens: 1,
@@ -35,6 +38,11 @@ test("extracts text deltas and the final result", () => {
 	assert.equal(result!.result, "Hello");
 	assert.equal(result!.totalCostUsd, 0.01);
 	assert.equal(result!.usage!.inputTokens, 1);
+	assert.equal(result!.durationMs, 2500);
+	assert.equal(result!.ttftMs, 400);
+	assert.equal(result!.model, "claude-sonnet-5");
+	assert.equal(result!.contextWindow, 1_000_000);
+	assert.equal(result!.maxOutputTokens, 64000);
 });
 
 test("handles malformed lines gracefully", () => {

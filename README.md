@@ -100,10 +100,30 @@ All optional — in `~/.pi/agent/settings.json`:
     "timeoutMs": 600000,
     "defaultMode": "general",
     "allowDangerous": false,
-    "inspectThinking": false
+    "inspectThinking": false,
+    "maxBudgetUsd": 3
   }
 }
 ```
+
+`maxBudgetUsd` is a global default spend cap — per-call (`maxBudgetUsd` /
+`--budget=`), per-template (frontmatter), then config, in that order.
+
+## Metrics recorded
+
+Every run records, in the tool result details **and** the transcript:
+
+| Metric | Source |
+| --- | --- |
+| Cost | `total_cost_usd` |
+| Tokens: input / output / cache write / cache read | `usage` |
+| Context consumed (% of window) | prompt tokens ÷ `modelUsage.contextWindow` |
+| Actual model | `modelUsage` key (canonical id, alias resolved) |
+| Context window / max output | `modelUsage` |
+| Turns, duration, TTFT, stop reason, session id | result |
+
+Token + cost also feed pi's `usage` on the tool result, so they show up in the
+pi footer stats. `maxBudgetUsd` hard-caps spend at the CLI level.
 
 ## Security model
 

@@ -32,7 +32,7 @@ test("buildTranscript includes metadata, activity and output", () => {
 	const t = buildTranscript({
 		mode: "review",
 		permissionMode: "plan",
-		model: "sonnet",
+		model: "claude-sonnet-5",
 		cwd: "/repo",
 		sessionId: "sess-1",
 		resumed: true,
@@ -40,6 +40,10 @@ test("buildTranscript includes metadata, activity and output", () => {
 		totalCostUsd: 0.1234,
 		isError: false,
 		stopReason: "end_turn",
+		durationMs: 3000,
+		usage: { inputTokens: 10, outputTokens: 20, cacheCreationInputTokens: 100, cacheReadInputTokens: 50 },
+		contextPercent: 2.1,
+		contextWindow: 1_000_000,
 		activityLog: ["▶ Read: a.ts  ✓"],
 		output: "findings…",
 	});
@@ -47,6 +51,10 @@ test("buildTranscript includes metadata, activity and output", () => {
 	assert.ok(t.includes("permission: plan"));
 	assert.ok(t.includes("session: sess-1 (resumed)"));
 	assert.ok(t.includes("cost: $0.1234"));
+	assert.ok(t.includes("tokens: input 10 · output 20 · cache+100 · cache 50"));
+	assert.ok(t.includes("context: 2.1% of 1,000,000 window"));
+	assert.ok(t.includes("duration: 3.0s"));
+	assert.ok(t.includes("model: claude-sonnet-5"));
 	assert.ok(t.includes("▶ Read: a.ts  ✓"));
 	assert.ok(t.includes("findings…"));
 });

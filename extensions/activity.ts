@@ -45,9 +45,29 @@ export function buildTranscript(opts: {
 	totalCostUsd: number;
 	isError: boolean;
 	stopReason: string | null;
+	durationMs: number | null;
+	usage: { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number } | null;
+	contextPercent: number | null;
+	contextWindow: number | null;
 	activityLog: string[];
 	output: string;
 }): string {
+	const u = opts.usage;
+	const tokens = u
+		? [
+				`input ${u.inputTokens}`,
+				`output ${u.outputTokens}`,
+				`cache+${u.cacheCreationInputTokens}`,
+				`cache ${u.cacheReadInputTokens}`,
+			]
+			.join(" · ")
+		: null;
+	const context =
+		opts.contextPercent !== null && opts.contextWindow
+			? `${opts.contextPercent.toFixed(1)}% of ${opts.contextWindow.toLocaleString()} window`
+			: null;
+	const duration = opts.durationMs !== null ? `${(opts.durationMs / 1000).toFixed(1)}s` : null;
+
 	return [
 		`# Delegated Claude run — ${opts.mode}`,
 		"",
@@ -57,6 +77,9 @@ export function buildTranscript(opts: {
 		`- cwd: ${opts.cwd}`,
 		`- session: ${opts.sessionId ?? "n/a"}${opts.resumed ? " (resumed)" : ""}`,
 		`- turns: ${opts.numTurns} · cost: $${opts.totalCostUsd.toFixed(4)} · isError: ${opts.isError}`,
+		`- tokens: ${tokens ?? "n/a"}`,
+		`- context: ${context ?? "n/a"}`,
+		`- duration: ${duration ?? "n/a"}`,
 		`- stop reason: ${opts.stopReason ?? "n/a"}`,
 		"",
 		"## Activity",

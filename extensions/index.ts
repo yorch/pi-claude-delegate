@@ -35,6 +35,8 @@ interface DelegateConfig {
 	allowDangerous: boolean;
 	/** Reveal Claude's thinking deltas in the live feed (default off). */
 	inspectThinking: boolean;
+	/** Global default spend cap in USD (overridable per call / per template). */
+	maxBudgetUsd?: number;
 }
 
 interface DelegateOptions {
@@ -71,6 +73,7 @@ function loadConfig(): DelegateConfig {
 		if (typeof c.defaultMode === "string") cfg.defaultMode = c.defaultMode;
 		if (typeof c.allowDangerous === "boolean") cfg.allowDangerous = c.allowDangerous;
 		if (typeof c.inspectThinking === "boolean") cfg.inspectThinking = c.inspectThinking;
+		if (typeof c.maxBudgetUsd === "number" && c.maxBudgetUsd > 0) cfg.maxBudgetUsd = c.maxBudgetUsd;
 	} catch {
 		// invalid settings — fall back to defaults
 	}
@@ -146,7 +149,7 @@ async function delegate(
 		cwd: ctx.cwd,
 		permissionMode,
 		model,
-		maxBudgetUsd: opts.maxBudgetUsd ?? template.maxBudgetUsd,
+		maxBudgetUsd: opts.maxBudgetUsd ?? template.maxBudgetUsd ?? config.maxBudgetUsd,
 		signal: opts.signal,
 		timeoutMs: config.timeoutMs,
 		resumeSessionId: opts.sessionId,
@@ -163,12 +166,19 @@ async function delegate(
 
 	// full transcript is always written — the record for post-hoc inspection
 	const activityLog = collectActivityLog(activityEvents);
+	const actualModel = result.model ?? model ?? null;
+	const promptTokens =
+		result.usage === null
+			? null
+			: result.usage.inputTokens + result.usage.cacheCreationInputTokens + result.usage.cacheReadInputTokens;
+	const contextPercent = promptTokens !== null && result.contextWindow ? (promptTokens / result.contextWindow) * 100 : null;
+
 	const file = saveOutput(
 		mode,
 		buildTranscript({
 			mode,
 			permissionMode,
-			model: model ?? null,
+			model: actualModel,
 			cwd: ctx.cwd,
 			sessionId: result.sessionId,
 			resumed: Boolean(opts.sessionId),
@@ -176,6 +186,10 @@ async function delegate(
 			totalCostUsd: result.totalCostUsd,
 			isError: result.isError,
 			stopReason: result.stopReason,
+			durationMs: result.durationMs,
+			usage: result.usage,
+			contextPercent,
+			contextWindow: result.contextWindow,
 			activityLog,
 			output: result.result || result.streamedText,
 		}),
@@ -186,7 +200,7 @@ async function delegate(
 		details: {
 			mode,
 			permissionMode,
-			model: model ?? null,
+			model: actualModel,
 			numTurns: result.numTurns,
 			totalCostUsd: result.totalCostUsd,
 			sessionId: result.sessionId,
@@ -195,6 +209,13 @@ async function delegate(
 			isError: result.isError,
 			resumed: Boolean(opts.sessionId),
 			file,
+			// metrics
+			durationMs: result.durationMs,
+			ttftMs: result.ttftMs,
+			contextWindow: result.contextWindow,
+			contextPercent,
+			promptTokens,
+			usage: result.usage,
 		},
 		result,
 		activityLog,
@@ -449,11 +470,15 @@ export default function (pi: ExtensionAPI) {
 				const file = (details.file as string) ?? null;
 				const sessionId = (details.sessionId as string) ?? null;
 				const resumeHint = sessionId ? ` · resume: /claude --resume=${sessionId} <prompt>` : "";
+				const duration =
+					typeof details.durationMs === "number" && details.durationMs !== null
+						? ` · ${((details.durationMs as number) / 1000).toFixed(1)}s`
+						: "";
 
 				if (ctx.hasUI) {
 					ctx.ui.setStatus("claude-delegate", undefined);
 					ctx.ui.notify(
-						`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s), $${((details.totalCostUsd as number) ?? 0).toFixed(3)}${resumeHint}` +
+						`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s)${duration}, $${((details.totalCostUsd as number) ?? 0).toFixed(3)}${resumeHint}` +
 							` · transcript: ${file}`,
 						"info",
 					);

@@ -16,6 +16,18 @@ export interface StreamedResult {
 	stopReason: string | null;
 	permissionDenials: unknown[];
 	usage: StreamedUsage | null;
+	/** Wall-clock duration of the run in ms. */
+	durationMs: number | null;
+	/** API duration in ms. */
+	durationApiMs: number | null;
+	/** Time to first token in ms. */
+	ttftMs: number | null;
+	/** Canonical model id (resolved from modelUsage, e.g. "claude-sonnet-5"). */
+	model: string | null;
+	/** Context window of the model actually used. */
+	contextWindow: number | null;
+	/** Max output tokens of the model actually used. */
+	maxOutputTokens: number | null;
 }
 
 /** Structured events describing what the delegated Claude is doing. */
@@ -93,6 +105,19 @@ export function parseStreamLines(lines: Iterable<string>): StreamParseOutcome {
 			}
 		} else if (o.type === "result") {
 			const u = isRecord(o.usage) ? o.usage : null;
+			// canonical model + context window come from modelUsage (keyed by model id)
+			let model: string | null = null;
+			let contextWindow: number | null = null;
+			let maxOutputTokens: number | null = null;
+			if (isRecord(o.modelUsage)) {
+				const first = Object.entries(o.modelUsage)[0]?.[1];
+				const firstKey = Object.keys(o.modelUsage)[0];
+				if (firstKey) model = firstKey;
+				if (isRecord(first)) {
+					if (typeof first.contextWindow === "number") contextWindow = first.contextWindow;
+					if (typeof first.maxOutputTokens === "number") maxOutputTokens = first.maxOutputTokens;
+				}
+			}
 			result = {
 				result: typeof o.result === "string" ? o.result : streamedText,
 				isError: o.is_error === true,
@@ -101,6 +126,12 @@ export function parseStreamLines(lines: Iterable<string>): StreamParseOutcome {
 				sessionId: typeof o.session_id === "string" ? o.session_id : null,
 				stopReason: typeof o.stop_reason === "string" ? o.stop_reason : null,
 				permissionDenials: Array.isArray(o.permission_denials) ? o.permission_denials : [],
+				durationMs: typeof o.duration_ms === "number" ? o.duration_ms : null,
+				durationApiMs: typeof o.duration_api_ms === "number" ? o.duration_api_ms : null,
+				ttftMs: typeof o.ttft_ms === "number" ? o.ttft_ms : null,
+				model,
+				contextWindow,
+				maxOutputTokens,
 				usage: u
 					? {
 							inputTokens: typeof u.input_tokens === "number" ? u.input_tokens : 0,

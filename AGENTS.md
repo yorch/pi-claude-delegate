@@ -44,6 +44,10 @@ CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
 - `extensions/usage.ts` — maps Claude usage/cost to pi's `Usage` so delegated
   runs show in pi's footer token/cost stats. `cacheCreationInputTokens` folds
   into `input`.
+- Metrics: every run records cost, token breakdown, context % (prompt tokens ÷
+  `modelUsage.contextWindow`), canonical model, duration, TTFT — in `details`
+  and the transcript. Spend cap resolution: call param → template → config
+  `maxBudgetUsd`.
 
 ## Conventions
 
