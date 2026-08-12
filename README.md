@@ -90,9 +90,10 @@ chat → you ask "what should we fix first?" and the main agent answers from it.
 - **Live activity feed** — while a delegation runs, the tool box streams what
   Claude is doing: `▶ Bash: List all tracked files in repo ✓`, `💭 thinking…`,
   and a tail of the answer as it forms. The `/claude` command opens a
-  **floating progress window** with the same feed (spinner; `esc` cancels — it
-  aborts the claude subprocess; `m` **minimizes** — the window hides while the
-  run continues in the background, footer chip keeps updating; re-open with
+  **floating progress window** with the same feed (spinner; `esc` twice
+  cancels — first press arms, second confirms within 1.5s, so a stray tap
+  never kills the run; `m` **minimizes** — the window hides while the run
+  continues in the background, footer chip keeps updating; re-open with
   `/claude watch`) and mirrors it into the footer status chip.
 - **Formatted results** — completed delegations render with a custom tool box:
   a colored head line (mode · turns · cost), the report as syntax-highlighted

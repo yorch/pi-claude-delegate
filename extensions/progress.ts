@@ -22,23 +22,48 @@ export interface ProgressWindowOptions {
 /** Create the overlay component; disposes the spinner timer. */
 export function progressWindow(tui: TUI, theme: Theme, opts: ProgressWindowOptions): Component & { dispose(): void } {
 	let frame = 0;
+	let armed = false;
+	let armTimer: ReturnType<typeof setTimeout> | null = null;
 	const timer = setInterval(() => {
 		frame++;
 		tui.requestRender();
 	}, SPIN_INTERVAL_MS);
+
+	const disarm = () => {
+		armed = false;
+		if (armTimer) {
+			clearTimeout(armTimer);
+			armTimer = null;
+		}
+	};
 
 	return {
 		render(width: number): string[] {
 			const header = theme.fg("accent", `${SPINNER[frame % SPINNER.length]} claude delegate`);
 			const lines = opts.getLines();
 			const body = lines.slice(-12).map((l) => theme.fg("muted", truncateToWidth(l, width)));
-			const hint = theme.fg("dim", "esc cancel · m minimize");
+			// double-ESC guard: first press arms cancel, second confirms
+			const hint = armed
+				? theme.fg("warning", "press esc again to cancel") + theme.fg("dim", " · m minimize")
+				: theme.fg("dim", "esc cancel · m minimize");
 			return [header, ...body, "", hint];
 		},
 		handleInput(data: string): void {
 			if (matchesKey(data, Key.escape)) {
-				opts.onCancel();
+				if (armed) {
+					disarm();
+					opts.onCancel();
+				} else {
+					armed = true;
+					armTimer = setTimeout(() => {
+						armed = false;
+						armTimer = null;
+						tui.requestRender();
+					}, 1500);
+					tui.requestRender();
+				}
 			} else if (data === "m") {
+				disarm();
 				opts.onMinimize();
 			}
 		},
@@ -47,6 +72,7 @@ export function progressWindow(tui: TUI, theme: Theme, opts: ProgressWindowOptio
 		},
 		dispose(): void {
 			clearInterval(timer);
+			disarm();
 		},
 	};
 }
