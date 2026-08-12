@@ -501,41 +501,38 @@ function summarize(content: string, max = 30_000): { text: string; truncated: bo
 	return { text: `${content.slice(0, max)}\n…[truncated — full output saved to file]`, truncated: true };
 }
 
-/** Minimal structural type for the message-append API (ctx.sessionManager is typed read-only). */
-interface SessionAppender {
-	appendCustomMessageEntry<T = unknown>(
-		customType: string,
-		content: string,
-		display: boolean,
-		details?: T,
-	): string;
-}
-
 /**
  * Append the delegated report as a custom message in the session history so
  * the main pi agent sees it on its next turn (and it persists in the session
  * file). Non-fatal on failure.
  */
+/**
+ * Queue the delegated report for injection into the agent's NEXT turn via
+ * `before_agent_start`. (Appending to the session manager alone does NOT reach
+ * the live agent — its in-memory message list is only rebuilt from the session
+ * on compaction/tree ops. The hook path feeds the report through the agent's
+ * own pipeline: it reaches the LLM and is persisted as a custom message.)
+ */
+interface PendingReport {
+	content: string;
+	details: Record<string, unknown>;
+}
+
+let pendingReport: PendingReport | null = null;
+
 function injectReport(
-	ctx: ExtensionContext,
+	_ctx: ExtensionContext,
 	opts: { mode: string; metrics: string; body: string; file?: string; sessionId?: string },
 ): void {
-	try {
-		const appender = ctx.sessionManager as unknown as SessionAppender;
-		const header = `## claude ${opts.mode} (${opts.metrics})`;
-		const foot: string[] = [];
-		if (opts.file) foot.push(`transcript: ${opts.file}`);
-		if (opts.sessionId) foot.push(`resume: \`/claude --resume=${opts.sessionId} <prompt>\``);
-		const message = [header, "", opts.body, foot.length > 0 ? `\n_${foot.join(" · ")}_` : ""].join("\n");
-		appender.appendCustomMessageEntry(
-			"claude-delegate",
-			message,
-			true,
-			{ mode: opts.mode, file: opts.file, sessionId: opts.sessionId, metrics: opts.metrics },
-		);
-	} catch {
-		// session append is best-effort — never fail the command over it
-	}
+	const header = `## claude ${opts.mode} (${opts.metrics})`;
+	const foot: string[] = [];
+	if (opts.file) foot.push(`transcript: ${opts.file}`);
+	if (opts.sessionId) foot.push(`resume: \`/claude --resume=${opts.sessionId} <prompt>\``);
+	const content = [header, "", opts.body, foot.length > 0 ? `\n_${foot.join(" · ")}_` : ""].join("\n");
+	pendingReport = {
+		content,
+		details: { mode: opts.mode, file: opts.file, sessionId: opts.sessionId, metrics: opts.metrics },
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -959,5 +956,23 @@ export default function (pi: ExtensionAPI) {
 		const hint = delegationHint(event.text, { autoDelegateHints: loadConfig().autoDelegateHints });
 		if (!hint) return { action: "continue" };
 		return { action: "transform", text: `${stripMarker(event.text)}\n\n${hint}` };
+	});
+
+	// ── Report injection ─────────────────────────────────────────────────────
+	// Deliver a pending claude report to the agent's next turn so the main
+	// session actually sees the results (session-only appends never reach the
+	// live agent's in-memory context). Injected once, then cleared.
+	pi.on("before_agent_start", async () => {
+		if (!pendingReport) return;
+		const report = pendingReport;
+		pendingReport = null;
+		return {
+			message: {
+				customType: "claude-delegate",
+				content: report.content,
+				display: true,
+				details: report.details,
+			},
+		};
 	});
 }
