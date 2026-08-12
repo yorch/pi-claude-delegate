@@ -66,6 +66,21 @@ Any registered template name becomes a valid `mode` for the tool and `/claude --
 
 **Skills:** delegated Claude runs with `cwd` = your repo, so `.claude/skills/` in the repo are automatically available. Pin one with `skill: <name>` in a template's frontmatter.
 
+## How the main session consumes the output
+
+- **Agent-driven (`claude_delegate` tool)** — the report is the tool result, so
+  it flows straight into the agent's context. The agent summarizes it, answers
+  follow-ups, and keeps working from it automatically.
+- **Manual (`/claude` command)** — after the run, the report is appended to the
+  session as a custom message: it appears in the conversation (themed) *and*
+  participates in LLM context, so your next prompt is answered with the report
+  already in hand. The full text is also in the transcript file. Nothing is
+  consumed automatically only in non-interactive modes (print/rpc), where the
+  report goes to stdout.
+
+So the natural loop is: `/claude --mode=review <task>` → the report lands in the
+chat → you ask "what should we fix first?" and the main agent answers from it.
+
 ## Inspecting what Claude is doing
 
 - **Live activity feed** — while a delegation runs, the tool box streams what

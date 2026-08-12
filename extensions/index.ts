@@ -227,6 +227,43 @@ function summarize(content: string, max = 30_000): { text: string; truncated: bo
 	return { text: `${content.slice(0, max)}\n…[truncated — full output saved to file]`, truncated: true };
 }
 
+/** Minimal structural type for the message-append API (ctx.sessionManager is typed read-only). */
+interface SessionAppender {
+	appendCustomMessageEntry<T = unknown>(
+		customType: string,
+		content: string,
+		display: boolean,
+		details?: T,
+	): string;
+}
+
+/**
+ * Append the delegated report as a custom message in the session history so
+ * the main pi agent sees it on its next turn (and it persists in the session
+ * file). Non-fatal on failure.
+ */
+function injectReport(
+	ctx: ExtensionContext,
+	opts: { mode: string; turns: number; cost: number; body: string; file?: string; sessionId?: string },
+): void {
+	try {
+		const appender = ctx.sessionManager as unknown as SessionAppender;
+		const header = `## claude ${opts.mode} (${opts.turns} turn(s) · $${opts.cost.toFixed(3)})`;
+		const foot: string[] = [];
+		if (opts.file) foot.push(`transcript: ${opts.file}`);
+		if (opts.sessionId) foot.push(`resume: \`/claude --resume=${opts.sessionId} <prompt>\``);
+		const message = [header, "", opts.body, foot.length > 0 ? `\n_${foot.join(" · ")}_` : ""].join("\n");
+		appender.appendCustomMessageEntry(
+			"claude-delegate",
+			message,
+			true,
+			{ mode: opts.mode, file: opts.file, sessionId: opts.sessionId, cost: opts.cost },
+		);
+	} catch {
+		// session append is best-effort — never fail the command over it
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	// ── Tool ─────────────────────────────────────────────────────────────────
 	pi.registerTool({
@@ -474,6 +511,17 @@ export default function (pi: ExtensionAPI) {
 					typeof details.durationMs === "number" && details.durationMs !== null
 						? ` · ${((details.durationMs as number) / 1000).toFixed(1)}s`
 						: "";
+
+				// inject the report into the session so the main agent consumes it
+				// on its next turn (participates in LLM context; full text in the file)
+				injectReport(ctx, {
+					mode: details.mode as string,
+					turns: (details.numTurns as number) ?? 0,
+					cost: (details.totalCostUsd as number) ?? 0,
+					body: summary.text,
+					file: file ?? undefined,
+					sessionId: sessionId ?? undefined,
+				});
 
 				if (ctx.hasUI) {
 					ctx.ui.setStatus("claude-delegate", undefined);
