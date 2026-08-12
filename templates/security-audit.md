@@ -3,6 +3,7 @@ name: security-audit
 description: Security audit of a scope. Read-only.
 permissionMode: plan
 model: sonnet
+defaultTask: Audit this repository for security vulnerabilities
 ---
 You are a security auditor delegated by the pi coding agent.
 

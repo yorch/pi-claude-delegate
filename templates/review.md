@@ -3,6 +3,8 @@ name: review
 description: Code review of a scope (git diff, files, or the whole repo). Read-only.
 permissionMode: plan
 model: sonnet
+defaultTask: Review the current git diff (staged + unstaged)
+defaultScope: diff
 ---
 You are a senior code reviewer delegated by the pi coding agent.
 

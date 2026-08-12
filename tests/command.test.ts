@@ -1,8 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClaudeCommand } from "../extensions/command.ts";
+import { parseClaudeCommand, resolveDefaults } from "../extensions/command.ts";
+import { parseTemplate } from "../extensions/templates.ts";
 
 const MODES = new Set(["review", "plan", "implement", "security-audit", "docs", "general"]);
+
+const TEMPLATES = new Map([
+	["review", parseTemplate("---\nname: review\ndefaultTask: Review the git diff\ndefaultScope: diff\n---\nbody")!],
+	["security-audit", parseTemplate("---\nname: security-audit\ndefaultTask: Audit the repo\n---\nbody")!],
+	["plan", parseTemplate("---\nname: plan\n---\nbody")!],
+]);
 
 test("bare mode name as first word", () => {
 	assert.deepEqual(parseClaudeCommand("review the auth flow", MODES), {
@@ -40,4 +47,32 @@ test("flags parse with defaults", () => {
 
 test("empty input", () => {
 	assert.deepEqual(parseClaudeCommand("", MODES), { task: "" });
+});
+
+test("resolveDefaults applies template defaults for bare modes", () => {
+	assert.deepEqual(resolveDefaults({ task: "", mode: "review" }, TEMPLATES), {
+		task: "Review the git diff",
+		scope: "diff",
+	});
+	assert.deepEqual(resolveDefaults({ task: "", mode: "security-audit" }, TEMPLATES), {
+		task: "Audit the repo",
+	});
+});
+
+test("resolveDefaults returns null when a mode needs a prompt", () => {
+	assert.equal(resolveDefaults({ task: "", mode: "plan" }, TEMPLATES), null);
+	assert.equal(resolveDefaults({ task: "" }, TEMPLATES), null);
+});
+
+test("resolveDefaults passes through an explicit prompt", () => {
+	assert.deepEqual(resolveDefaults({ task: "review the auth flow", mode: "review" }, TEMPLATES), {
+		task: "review the auth flow",
+	});
+});
+
+test("explicit scope wins over the template default", () => {
+	assert.deepEqual(resolveDefaults({ task: "", mode: "review", scope: "auth/" }, TEMPLATES), {
+		task: "Review the git diff",
+		scope: "auth/",
+	});
 });

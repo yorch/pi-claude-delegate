@@ -29,8 +29,12 @@ Manual delegation:
 
 Only the prompt is required. A **mode name as the first word** selects the
 mode; every `--flag` is optional (mode defaults to `defaultMode`, model to
-the template/config, scope to the whole repo). `/claude review` alone prints
-a hint for the review mode instead of running.
+the template/config, scope to the whole repo).
+
+Some modes have **default tasks** when the prompt is omitted:
+`/claude review` reviews the current git diff (`scope: diff`),
+`/claude security-audit` audits the repository. Modes without a default
+(`plan`, `implement`, `docs`, `general`) print a hint asking for a prompt.
 
 The `claude_delegate` tool takes: `task`, `mode`, `scope` (`"diff"` = current git diff, a path list, or omit for the whole repo), `model`, `maxBudgetUsd`, `allowDangerous`.
 

@@ -19,6 +19,10 @@ export interface DelegateTemplate {
 	maxBudgetUsd?: number;
 	/** A Claude Code skill (from the repo's .claude/skills) to pin. */
 	skill?: string;
+	/** Task used when `/claude <mode>` is invoked without a prompt. */
+	defaultTask?: string;
+	/** Scope implied by the default task (e.g. "diff"). */
+	defaultScope?: string;
 	prompt: string;
 }
 
@@ -59,6 +63,8 @@ export function parseTemplate(text: string): DelegateTemplate | null {
 		model: meta.model || undefined,
 		maxBudgetUsd: Number.isFinite(budget) && budget > 0 ? budget : undefined,
 		skill: meta.skill || undefined,
+		defaultTask: meta.defaultTask || undefined,
+		defaultScope: meta.defaultScope || undefined,
 		prompt: m[2].trim(),
 	};
 }

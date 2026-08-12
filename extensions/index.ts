@@ -22,7 +22,7 @@ import { Type } from "typebox";
 import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, type Component } from "@earendil-works/pi-tui";
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
-import { parseClaudeCommand } from "./command.ts";
+import { parseClaudeCommand, resolveDefaults } from "./command.ts";
 import { delegationHint, stripMarker } from "./hint.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
@@ -133,6 +133,9 @@ async function delegate(
 			`unknown claude_delegate mode "${mode}". Available: ${[...templates.keys()].sort().join(", ")}`,
 		);
 	}
+	// fall back to the template's default task when none was given
+	const task = opts.task || template.defaultTask;
+	if (!task) throw new Error(`claude_delegate mode "${mode}" requires a task`);
 
 	// scope "diff" → compute the git diff ourselves (reliable, works in plan mode)
 	let scopeText: string | null = opts.scope ?? null;
@@ -145,7 +148,7 @@ async function delegate(
 
 	const permissionMode = opts.allowDangerous ? "bypassPermissions" : template.permissionMode;
 	const model = opts.model ?? template.model ?? config.model;
-	const prompt = buildPrompt(template, opts.task, scopeText, ctx.cwd);
+	const prompt = buildPrompt(template, task, scopeText, ctx.cwd);
 
 	const activityEvents: ActivityEvent[] = [];
 	const result = await runClaude({
@@ -461,17 +464,19 @@ export default function (pi: ExtensionAPI) {
 			description:
 				"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] [--resume=<session-id>] <prompt> — or use a mode name as the first word: /claude review <prompt>",
 		handler: async (args, ctx) => {
-			const parsed = parseClaudeCommand(args, new Set(loadTemplates(ctx.cwd).keys()));
-			const { task, mode } = parsed;
+			const templates = loadTemplates(ctx.cwd);
+			const parsed = parseClaudeCommand(args, new Set(templates.keys()));
+			const resolved = resolveDefaults(parsed, templates);
 
-			if (!task) {
-				if (mode) {
-					ctx.ui.notify?.(`/claude ${mode} <what to do> — give a prompt for the "${mode}" mode`, "warning");
+			if (!resolved) {
+				if (parsed.mode) {
+					ctx.ui.notify?.(`/claude ${parsed.mode} <what to do> — give a prompt for the "${parsed.mode}" mode`, "warning");
 				} else {
 					ctx.ui.notify?.("Usage: /claude [--mode=…] [--model=…] [--scope=…] <prompt>", "warning");
 				}
 				return;
 			}
+			const { mode } = parsed;
 
 			if (ctx.hasUI) {
 				ctx.ui.setStatus("claude-delegate", ctx.ui.theme.fg("accent", "●") + ctx.ui.theme.fg("dim", ` claude ${mode ?? ""} running…`));
@@ -492,9 +497,9 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				const { content, details } = await delegate(pi, ctx, {
-					task,
+					task: resolved.task,
 					mode: parsed.mode,
-					scope: parsed.scope,
+					scope: resolved.scope,
 					model: parsed.model,
 					maxBudgetUsd: parsed.budget,
 					sessionId: parsed.sessionId,

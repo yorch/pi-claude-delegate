@@ -1,3 +1,5 @@
+import type { DelegateTemplate } from "./templates.ts";
+
 /**
  * Pure parser for the `/claude` command: `--key=value` flags, with a bare
  * template name as the first word selecting the mode.
@@ -40,4 +42,27 @@ export function parseClaudeCommand(raw: string, knownModes: ReadonlySet<string>)
 	}
 	if (flags.resume) out.sessionId = flags.resume;
 	return out;
+}
+
+/**
+ * Apply template defaults when the prompt is empty: modes with a
+ * `defaultTask` run (e.g. `/claude review` → review the git diff);
+ * modes without one return null (the caller should ask for a prompt).
+ */
+export function resolveDefaults(
+	args: ClaudeCommandArgs,
+	templates: ReadonlyMap<string, DelegateTemplate>,
+): { task: string; scope?: string } | null {
+	if (args.task) {
+		return args.scope ? { task: args.task, scope: args.scope } : { task: args.task };
+	}
+	if (args.mode) {
+		const t = templates.get(args.mode);
+		if (t?.defaultTask) {
+			const scope = args.scope ?? t.defaultScope;
+			return scope ? { task: t.defaultTask, scope } : { task: t.defaultTask };
+		}
+		return null;
+	}
+	return null;
 }
