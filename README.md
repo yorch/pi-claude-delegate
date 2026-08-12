@@ -135,10 +135,13 @@ be chosen on its own judgment), but:
   system-prompt bias, no hint injection. Delegation happens via the `/claude`
   command or when the agent chooses the tool itself.
 - **`autoDelegateHints: true`** — the input hook recognizes delegation intent
-  and appends a hint for the agent: explicit markers (`@claude`, "…with claude",
-  "delegate … to claude" — the `@claude` marker is stripped) and imperative
-  review/plan/audit/docs phrasing. Already-explicit references to
-  `claude_delegate` or `/claude` are never re-hinted.
+  and appends a hint for the agent: explicit markers ("…with claude",
+  "delegate … to claude", "via claude") and imperative review/plan/audit/docs
+  phrasing. Already-explicit references to `claude_delegate` or `/claude` are
+  never re-hinted.
+
+  > **Marker caveat:** don't *start* a prompt with `@claude` — pi parses a
+  > leading `@` as a file attachment. Use the phrase forms above, or `/claude`.
 
 ## Metrics recorded
 

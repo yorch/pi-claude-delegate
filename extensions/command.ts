@@ -34,7 +34,10 @@ export function parseClaudeCommand(raw: string, knownModes: ReadonlySet<string>)
 	if (mode) out.mode = mode;
 	if (flags.model) out.model = flags.model;
 	if (flags.scope) out.scope = flags.scope;
-	if (flags.budget !== undefined) out.budget = Number(flags.budget);
+	if (flags.budget !== undefined) {
+		const budget = Number(flags.budget);
+		if (Number.isFinite(budget) && budget > 0) out.budget = budget;
+	}
 	if (flags.resume) out.sessionId = flags.resume;
 	return out;
 }

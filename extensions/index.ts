@@ -26,7 +26,7 @@ import { parseClaudeCommand } from "./command.ts";
 import { delegationHint, stripMarker } from "./hint.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
-import { buildTranscript, collectActivityLog, formatToolUse } from "./activity.ts";
+import { buildTranscript, collectActivityLog, formatToolUse, safeSegmentName } from "./activity.ts";
 import type { ActivityEvent } from "./stream-parse.ts";
 
 interface DelegateConfig {
@@ -93,16 +93,15 @@ function saveOutput(mode: string, text: string): string {
 	const dir = outputsDir();
 	mkdirSync(dir, { recursive: true });
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-	const file = join(dir, `${stamp}-${mode}.md`);
+	const file = join(dir, `${stamp}-${safeSegmentName(mode)}.md`);
 	writeFileSync(file, text, "utf8");
 	return file;
 }
 
 function buildPrompt(template: DelegateTemplate, task: string, scopeText: string | null, cwd: string): string {
-	const branch = "";
 	let prompt = [
 		`You are being delegated a subtask by the pi coding agent.`,
-		`Working directory: ${cwd}${branch ? ` (branch ${branch})` : ""}`,
+		`Working directory: ${cwd}`,
 		`Mode: ${template.name}`,
 		``,
 		template.prompt,
@@ -363,6 +362,7 @@ export default function (pi: ExtensionAPI) {
 				onActivity: (ev) => {
 					if (ev.kind === "tool_input") {
 						feed.push(`▶ ${formatToolUse(ev.name, ev.input)}`);
+						if (feed.length > 40) feed.splice(0, feed.length - 40);
 					} else if (ev.kind === "tool_result") {
 						const last = feed.length - 1;
 						if (last >= 0 && feed[last].startsWith("▶")) feed[last] += ev.isError ? " ✗" : " ✓";

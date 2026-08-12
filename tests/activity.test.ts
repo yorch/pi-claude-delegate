@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTranscript, collectActivityLog, formatToolUse } from "../extensions/activity.ts";
+import { buildTranscript, collectActivityLog, formatToolUse, safeSegmentName } from "../extensions/activity.ts";
 
 test("formatToolUse prefers description", () => {
 	assert.equal(formatToolUse("Bash", { command: "ls", description: "List files" }), "Bash: List files");
@@ -26,6 +26,13 @@ test("collectActivityLog pairs tool calls with results", () => {
 		{ kind: "tool_result", isError: true },
 	]);
 	assert.deepEqual(log, ["▶ Bash: ls  ✓", "▶ Grep: x  ✗ error"]);
+});
+
+test("safeSegmentName neutralizes path separators", () => {
+	assert.equal(safeSegmentName("review"), "review");
+	assert.equal(safeSegmentName("../../../etc/passwd"), "etc_passwd");
+	assert.equal(safeSegmentName("a b:c"), "a_b_c");
+	assert.equal(safeSegmentName("!!!"), "delegate");
 });
 
 test("buildTranscript includes metadata, activity and output", () => {

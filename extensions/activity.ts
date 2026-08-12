@@ -4,6 +4,12 @@ function truncate(s: string, max: number): string {
 	return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/** Make a template/mode name safe for use in a filename. */
+export function safeSegmentName(name: string): string {
+	const safe = name.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+	return safe.length > 0 ? safe : "delegate";
+}
+
 /** Human-readable one-liner for a tool call (uses Claude's `description` when present). */
 export function formatToolUse(name: string, input: Record<string, unknown>): string {
 	if (typeof input.description === "string" && input.description) {
