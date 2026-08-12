@@ -13,6 +13,8 @@ export interface ClaudeCommandArgs {
 	budget?: number;
 	/** Resume an existing delegated session (--resume=<id>). */
 	sessionId?: string;
+	/** GitHub PR number/URL to review (--pr=). */
+	pr?: string;
 }
 
 export function parseClaudeCommand(raw: string, knownModes: ReadonlySet<string>): ClaudeCommandArgs {
@@ -41,6 +43,7 @@ export function parseClaudeCommand(raw: string, knownModes: ReadonlySet<string>)
 		if (Number.isFinite(budget) && budget > 0) out.budget = budget;
 	}
 	if (flags.resume) out.sessionId = flags.resume;
+	if (flags.pr) out.pr = flags.pr;
 	return out;
 }
 

@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTranscript, collectActivityLog, formatToolUse, safeSegmentName } from "../extensions/activity.ts";
+import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { buildTranscript, collectActivityLog, formatToolUse, pruneOutputs, safeSegmentName } from "../extensions/activity.ts";
 
 test("formatToolUse prefers description", () => {
 	assert.equal(formatToolUse("Bash", { command: "ls", description: "List files" }), "Bash: List files");
@@ -33,6 +36,32 @@ test("safeSegmentName neutralizes path separators", () => {
 	assert.equal(safeSegmentName("../../../etc/passwd"), "etc_passwd");
 	assert.equal(safeSegmentName("a b:c"), "a_b_c");
 	assert.equal(safeSegmentName("!!!"), "delegate");
+});
+
+test("pruneOutputs keeps the newest N transcripts", () => {
+	const dir = join(tmpdir(), `pcd-prune-${Date.now()}`);
+	mkdirSync(dir, { recursive: true });
+	try {
+		for (let i = 0; i < 5; i++) {
+			writeFileSync(join(dir, `00${i}-a.md`), "x");
+		}
+		pruneOutputs(dir, 2);
+		assert.equal(readdirSync(dir).filter((f) => f.endsWith(".md")).length, 2);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("pruneOutputs maxCount 0 keeps everything", () => {
+	const dir = join(tmpdir(), `pcd-noprune-${Date.now()}`);
+	mkdirSync(dir, { recursive: true });
+	try {
+		for (let i = 0; i < 3; i++) writeFileSync(join(dir, `${i}.md`), "x");
+		pruneOutputs(dir, 0);
+		assert.equal(readdirSync(dir).length, 3);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("buildTranscript includes metadata, activity and output", () => {

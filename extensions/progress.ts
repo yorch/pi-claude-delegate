@@ -13,6 +13,8 @@ const SPIN_INTERVAL_MS = 100;
 export interface ProgressWindowOptions {
 	/** Live content lines (tool feed, thinking, text tail). */
 	getLines: () => string[];
+	/** Show an "unrestricted permissions" warning banner. */
+	dangerous?: boolean;
 	/** Called when the user presses ESC. */
 	onCancel: () => void;
 	/** Called when the user presses `m` (minimize — hide the window, keep the run going). */
@@ -42,11 +44,17 @@ export function progressWindow(tui: TUI, theme: Theme, opts: ProgressWindowOptio
 			const header = theme.fg("accent", `${SPINNER[frame % SPINNER.length]} claude delegate`);
 			const lines = opts.getLines();
 			const body = lines.slice(-12).map((l) => theme.fg("muted", truncateToWidth(l, width)));
+			const out: string[] = [header];
+			if (opts.dangerous) {
+				out.push(theme.fg("error", "⚠ bypassPermissions — unrestricted access"));
+			}
+			out.push(...body);
 			// double-ESC guard: first press arms cancel, second confirms
 			const hint = armed
 				? theme.fg("warning", "press esc again to cancel") + theme.fg("dim", " · m minimize")
 				: theme.fg("dim", "esc cancel · m minimize");
-			return [header, ...body, "", hint];
+			out.push("", hint);
+			return out;
 		},
 		handleInput(data: string): void {
 			if (matchesKey(data, Key.escape)) {

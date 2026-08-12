@@ -35,7 +35,14 @@ CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
   extraction). Unit-tested; keep it free of IO.
 - `extensions/templates.ts` — template discovery + frontmatter parsing.
 - `extensions/activity.ts` — live-feed formatters (`formatToolUse`), transcript builder.
-- `extensions/command.ts` — pure parser for `/claude` (`--flags` + first-word mode).
+- `extensions/command.ts` — pure parser for `/claude` (`--flags` + first-word mode + `--pr`).
+- `extensions/progress.ts` — the progress-window overlay (spinner, double-ESC
+  cancel, `m` minimize, `dangerous` banner).
+- Subcommand UIs live in `extensions/index.ts`: `/claude list` (modes picker),
+  `/claude history` (SelectList + scrollable transcript viewer + resume).
+- Config surface: `modelAliases` (economy/balanced/max), `maxConcurrent`
+  (module-scoped `activeRuns` guard), `maxTranscripts` (`pruneOutputs`).
+- ROADMAP.md is the working/tracking doc — keep it in sync.
   Built-ins ship in `templates/*.md`; users add custom templates in
   `~/.pi/agent/claude-delegate/templates/` (global) and
   `<cwd>/.pi/claude-delegate/templates/` (project). Later sources override

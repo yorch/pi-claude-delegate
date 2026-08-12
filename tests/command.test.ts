@@ -45,6 +45,13 @@ test("flags parse with defaults", () => {
 	});
 });
 
+test("--pr and --resume flags parse", () => {
+	const r = parseClaudeCommand("--mode=review --pr=42 --resume=abc-123 review it", MODES);
+	assert.equal(r.mode, "review");
+	assert.equal(r.pr, "42");
+	assert.equal(r.sessionId, "abc-123");
+});
+
 test("empty input", () => {
 	assert.deepEqual(parseClaudeCommand("", MODES), { task: "" });
 });

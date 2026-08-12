@@ -15,19 +15,30 @@
  *                          "defaultMode": "general", "allowDangerous": false } }
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Type } from "typebox";
 import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text, type Component, type OverlayHandle } from "@earendil-works/pi-tui";
+import {
+	Container,
+	Key,
+	Markdown,
+	matchesKey,
+	SelectList,
+	Text,
+	truncateToWidth,
+	type Component,
+	type OverlayHandle,
+	type SelectItem,
+} from "@earendil-works/pi-tui";
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
 import { parseClaudeCommand, resolveDefaults } from "./command.ts";
 import { delegationHint, stripMarker } from "./hint.ts";
 import { progressWindow } from "./progress.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
-import { buildTranscript, collectActivityLog, formatToolUse, safeSegmentName } from "./activity.ts";
+import { buildTranscript, collectActivityLog, formatToolUse, pruneOutputs, safeSegmentName } from "./activity.ts";
 import type { ActivityEvent } from "./stream-parse.ts";
 
 interface DelegateConfig {
@@ -41,6 +52,12 @@ interface DelegateConfig {
 	maxBudgetUsd?: number;
 	/** Hint on imperative review/plan/audit phrasing (explicit markers always work). */
 	autoDelegateHints: boolean;
+	/** Model aliases: template `model` values are resolved through this map. */
+	modelAliases: Record<string, string>;
+	/** Max overlapping delegated runs (0 = unlimited). */
+	maxConcurrent: number;
+	/** Max transcript files kept in the outputs dir (0 = no pruning). */
+	maxTranscripts: number;
 }
 
 interface DelegateOptions {
@@ -51,10 +68,15 @@ interface DelegateOptions {
 	maxBudgetUsd?: number;
 	allowDangerous?: boolean;
 	sessionId?: string;
+	/** GitHub PR number/URL (scope "pr" or --pr=). */
+	pr?: string;
 	onStream?: (text: string) => void;
 	onActivity?: (ev: ActivityEvent) => void;
 	signal?: AbortSignal;
 }
+
+// concurrency guard: overlapping delegated runs (module-scoped so both the tool and /claude obey it)
+let activeRuns = 0;
 
 function agentDir(): string {
 	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -67,6 +89,9 @@ function loadConfig(): DelegateConfig {
 		allowDangerous: false,
 		inspectThinking: false,
 		autoDelegateHints: false,
+		modelAliases: { economy: "haiku", balanced: "sonnet", max: "opus" },
+		maxConcurrent: 1,
+		maxTranscripts: 100,
 	};
 	try {
 		const file = join(agentDir(), "settings.json");
@@ -80,6 +105,13 @@ function loadConfig(): DelegateConfig {
 		if (typeof c.inspectThinking === "boolean") cfg.inspectThinking = c.inspectThinking;
 		if (typeof c.maxBudgetUsd === "number" && c.maxBudgetUsd > 0) cfg.maxBudgetUsd = c.maxBudgetUsd;
 		if (typeof c.autoDelegateHints === "boolean") cfg.autoDelegateHints = c.autoDelegateHints;
+		if (c.modelAliases && typeof c.modelAliases === "object") {
+			for (const [k, v] of Object.entries(c.modelAliases)) {
+				if (typeof v === "string" && v) cfg.modelAliases[k] = v;
+			}
+		}
+		if (typeof c.maxConcurrent === "number" && c.maxConcurrent >= 0) cfg.maxConcurrent = c.maxConcurrent;
+		if (typeof c.maxTranscripts === "number" && c.maxTranscripts >= 0) cfg.maxTranscripts = c.maxTranscripts;
 	} catch {
 		// invalid settings — fall back to defaults
 	}
@@ -111,6 +143,160 @@ async function closeWhenMounted(getClose: () => (() => void) | null, capMs: numb
 
 function outputsDir(): string {
 	return join(agentDir(), "claude-delegate", "outputs");
+}
+
+// ── Subcommand UIs (/claude list, /claude history) ──────────────────────────
+
+function formatTemplateRow(t: DelegateTemplate): string {
+	const parts = [t.name, `[${t.permissionMode}]`, t.model ? `model=${t.model}` : "", t.defaultTask ? "↳ default task" : ""];
+	return `${parts.filter(Boolean).join("  ")}  —  ${t.description}`;
+}
+
+async function showModes(ctx: ExtensionContext): Promise<void> {
+	const rows = [...loadTemplates(ctx.cwd).values()].map(formatTemplateRow);
+	if (!ctx.hasUI) {
+		process.stdout.write(`${rows.join("\n")}\n`);
+		return;
+	}
+	await ctx.ui.custom((tui, theme, _kb, done) => {
+		let offset = 0;
+		const height = 12;
+		return {
+			render(width: number): string[] {
+				const header = theme.fg("accent", "claude delegate — modes (↑↓ scroll · any key to close)");
+				const visible = rows.slice(offset, offset + height);
+				return [header, ...visible.map((l) => theme.fg("muted", truncateToWidth(l, width)))];
+			},
+			handleInput(data: string): void {
+				if (matchesKey(data, Key.up) && offset > 0) {
+					offset--;
+					tui.requestRender();
+				} else if (matchesKey(data, Key.down) && offset < rows.length - 1) {
+					offset++;
+					tui.requestRender();
+				} else {
+					done(undefined);
+				}
+			},
+			invalidate() {
+				// stateless render
+			},
+		};
+	});
+}
+
+interface HistoryEntry {
+	file: string;
+	mode: string;
+	cost: number;
+	sessionId: string | null;
+	mtime: number;
+}
+
+function readHistory(dir: string): HistoryEntry[] {
+	try {
+		return readdirSync(dir)
+			.filter((f) => f.endsWith(".md") && !f.includes("-partial"))
+			.map((f) => {
+				const file = join(dir, f);
+				let mode = "delegate";
+				let cost = 0;
+				let sessionId: string | null = null;
+				try {
+					const head = readFileSync(file, "utf8").slice(0, 2000);
+					const mm = /^# Delegated Claude run — (.+)$/m.exec(head);
+					if (mm) mode = mm[1];
+					const cm = /\bcost: \$([\d.]+)/.exec(head);
+					if (cm) cost = Number(cm[1]);
+					const sm = /\bsession: ([0-9a-f-]+)/.exec(head);
+					if (sm) sessionId = sm[1];
+				} catch {
+					// unreadable — keep defaults
+				}
+				return { file, mode, cost, sessionId, mtime: statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0 };
+			})
+			.sort((a, b) => b.mtime - a.mtime);
+	} catch {
+		return [];
+	}
+}
+
+async function viewTranscript(ctx: ExtensionContext, entry: HistoryEntry): Promise<void> {
+	if (!ctx.hasUI) {
+		process.stdout.write(readFileSync(entry.file, "utf8"));
+		return;
+	}
+	await ctx.ui.custom((tui, theme, _kb, done) => {
+		const lines = readFileSync(entry.file, "utf8").split("\n");
+		let offset = 0;
+		const height = 12;
+		return {
+			render(width: number): string[] {
+				const resume = entry.sessionId ? ` · r resume` : "";
+				const header = theme.fg("accent", `${basename(entry.file)} (↑↓ scroll${resume} · esc close)`);
+				const visible = lines.slice(offset, offset + height);
+				return [header, ...visible.map((l) => theme.fg("muted", truncateToWidth(l, width)))];
+			},
+			handleInput(data: string): void {
+				if (matchesKey(data, Key.down) && offset < lines.length - 1) {
+					offset++;
+					tui.requestRender();
+				} else if (matchesKey(data, Key.up) && offset > 0) {
+					offset--;
+					tui.requestRender();
+				} else if (matchesKey(data, Key.escape)) {
+					done(undefined);
+				} else if (entry.sessionId && data === "r") {
+					ctx.ui.notify?.(`resume with: /claude --resume=${entry.sessionId} <prompt>`, "info");
+				}
+			},
+			invalidate() {
+				// stateless render
+			},
+		};
+	});
+}
+
+async function showHistory(ctx: ExtensionContext, dir: string): Promise<void> {
+	const entries = readHistory(dir);
+	if (entries.length === 0) {
+		ctx.ui.notify?.("No transcripts yet — run /claude <mode> <prompt> first", "info");
+		return;
+	}
+	if (!ctx.hasUI) {
+		for (const e of entries) {
+			process.stdout.write(`${e.mode} · $${e.cost.toFixed(3)} · ${e.sessionId ?? "-"}\n`);
+		}
+		return;
+	}
+	const entry = await ctx.ui.custom((tui, theme, _kb, done) => {
+		const items: SelectItem[] = entries.map((e) => ({
+			value: e.file,
+			label: `${e.mode} · $${e.cost.toFixed(3)} · ${new Date(e.mtime).toISOString().slice(0, 16)}`,
+			description: e.sessionId ? `session ${e.sessionId.slice(0, 8)}…` : undefined,
+		}));
+		const list = new SelectList(items, Math.min(items.length, 10), {
+			selectedPrefix: (s: string) => theme.fg("accent", s),
+			selectedText: (s: string) => theme.fg("accent", s),
+			description: (s: string) => theme.fg("dim", s),
+			scrollInfo: (s: string) => theme.fg("dim", s),
+			noMatch: (s: string) => theme.fg("warning", s),
+		});
+		list.onSelect = (item) => done(item.value);
+		list.onCancel = () => done(undefined);
+		return {
+			render: (w: number) => list.render(w),
+			invalidate: () => list.invalidate(),
+			handleInput: (data: string) => {
+				list.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+	if (entry) {
+		const chosen = entries.find((e) => e.file === entry);
+		if (chosen) await viewTranscript(ctx, chosen);
+	}
 }
 
 function saveOutput(mode: string, text: string): string {
@@ -161,42 +347,97 @@ async function delegate(
 	const task = opts.task || template.defaultTask;
 	if (!task) throw new Error(`claude_delegate mode "${mode}" requires a task`);
 
-	// scope "diff" → compute the git diff ourselves (reliable, works in plan mode)
+	// concurrency guard: cap overlapping delegated runs (each costs money)
+	if (config.maxConcurrent > 0 && activeRuns >= config.maxConcurrent) {
+		throw new Error("another claude run is already in progress");
+	}
+	activeRuns++;
+	const release = () => {
+		activeRuns--;
+	};
+
+	// scope "diff" → compute the git diff ourselves; "pr" → the current PR's diff
 	let scopeText: string | null = opts.scope ?? null;
 	if (opts.scope === "diff") {
 		const diff = await pi.exec("git", ["diff", "HEAD"], { cwd: ctx.cwd });
 		scopeText = diff.stdout
 			? `Current git diff (working tree vs HEAD):\n${diff.stdout}`
 			: "No git diff vs HEAD (working tree clean).";
+	} else if (opts.scope === "pr" || opts.pr) {
+		const target = opts.pr ?? "";
+		const pr = await pi.exec("gh", target ? ["pr", "diff", target] : ["pr", "diff"], { cwd: ctx.cwd });
+		scopeText = pr.stdout
+			? `Pull request diff (${target || "current branch"}):\n${pr.stdout}`
+			: `Could not resolve the PR diff${pr.stderr ? ` — ${pr.stderr.trim().slice(0, 300)}` : ""}.`;
 	}
 
 	const permissionMode = opts.allowDangerous ? "bypassPermissions" : template.permissionMode;
-	const model = opts.model ?? template.model ?? config.model;
+	const resolveModel = (m?: string) => (m ? (config.modelAliases[m] ?? m) : undefined);
+	const model = resolveModel(opts.model) ?? resolveModel(template.model) ?? resolveModel(config.model);
 	const prompt = buildPrompt(template, task, scopeText, ctx.cwd);
 
 	const activityEvents: ActivityEvent[] = [];
-	const result = await runClaude({
-		prompt,
-		cwd: ctx.cwd,
-		permissionMode,
-		model,
-		maxBudgetUsd: opts.maxBudgetUsd ?? template.maxBudgetUsd ?? config.maxBudgetUsd,
-		signal: opts.signal,
-		timeoutMs: config.timeoutMs,
-		resumeSessionId: opts.sessionId,
-		onStream: opts.onStream,
-		onActivity: (ev) => {
-			activityEvents.push(ev);
-			opts.onActivity?.(ev);
-		},
-	});
+	let streamedFull = "";
+	const activityLog: string[] = [];
+	let result: ClaudeResult;
+	try {
+		result = await runClaude({
+			prompt,
+			cwd: ctx.cwd,
+			permissionMode,
+			model,
+			maxBudgetUsd: opts.maxBudgetUsd ?? template.maxBudgetUsd ?? config.maxBudgetUsd,
+			signal: opts.signal,
+			timeoutMs: config.timeoutMs,
+			resumeSessionId: opts.sessionId,
+			onStream: (t) => {
+				streamedFull += t;
+				opts.onStream?.(t);
+			},
+			onActivity: (ev) => {
+				activityEvents.push(ev);
+				opts.onActivity?.(ev);
+			},
+		});
+	} catch (err) {
+		release();
+		// preserve partial work on cancel/timeout/error
+		if (streamedFull.length > 0) {
+			try {
+				saveOutput(
+					`${mode}-partial`,
+					buildTranscript({
+						mode: `${mode} (partial)`,
+						permissionMode,
+						model: model ?? null,
+						cwd: ctx.cwd,
+						sessionId: null,
+						resumed: Boolean(opts.sessionId),
+						numTurns: 0,
+						totalCostUsd: 0,
+						isError: true,
+						stopReason: null,
+						durationMs: null,
+						usage: null,
+						contextPercent: null,
+						contextWindow: null,
+						activityLog: collectActivityLog(activityEvents),
+						output: streamedFull,
+					}),
+				);
+			} catch {
+				// best-effort
+			}
+		}
+		throw err;
+	}
+	release();
 
 	if (result.isError && !result.result && !result.streamedText) {
 		throw new Error("claude reported an error and produced no output");
 	}
 
 	// full transcript is always written — the record for post-hoc inspection
-	const activityLog = collectActivityLog(activityEvents);
 	const actualModel = result.model ?? model ?? null;
 	const promptTokens =
 		result.usage === null
@@ -225,6 +466,8 @@ async function delegate(
 			output: result.result || result.streamedText,
 		}),
 	);
+	// retention: keep the outputs dir bounded
+	pruneOutputs(outputsDir(), config.maxTranscripts);
 
 	return {
 		content: result.result || result.streamedText || "(empty result)",
@@ -275,11 +518,11 @@ interface SessionAppender {
  */
 function injectReport(
 	ctx: ExtensionContext,
-	opts: { mode: string; turns: number; cost: number; body: string; file?: string; sessionId?: string },
+	opts: { mode: string; metrics: string; body: string; file?: string; sessionId?: string },
 ): void {
 	try {
 		const appender = ctx.sessionManager as unknown as SessionAppender;
-		const header = `## claude ${opts.mode} (${opts.turns} turn(s) · $${opts.cost.toFixed(3)})`;
+		const header = `## claude ${opts.mode} (${opts.metrics})`;
 		const foot: string[] = [];
 		if (opts.file) foot.push(`transcript: ${opts.file}`);
 		if (opts.sessionId) foot.push(`resume: \`/claude --resume=${opts.sessionId} <prompt>\``);
@@ -288,7 +531,7 @@ function injectReport(
 			"claude-delegate",
 			message,
 			true,
-			{ mode: opts.mode, file: opts.file, sessionId: opts.sessionId, cost: opts.cost },
+			{ mode: opts.mode, file: opts.file, sessionId: opts.sessionId, metrics: opts.metrics },
 		);
 	} catch {
 		// session append is best-effort — never fail the command over it
@@ -492,7 +735,7 @@ export default function (pi: ExtensionAPI) {
 			description:
 				"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] [--resume=<session-id>] <prompt> — or use a mode name as the first word: /claude review <prompt>",
 		handler: async (args, ctx) => {
-			// subcommands: re-show a minimized progress window
+			// subcommands
 			const sub = args.trim();
 			if (sub === "watch" || sub === "show") {
 				if (activeOverlay) {
@@ -503,10 +746,23 @@ export default function (pi: ExtensionAPI) {
 				}
 				return;
 			}
+			if (sub === "list") {
+				await showModes(ctx);
+				return;
+			}
+			if (sub === "history" || sub === "logs") {
+				await showHistory(ctx, outputsDir());
+				return;
+			}
 
 			const templates = loadTemplates(ctx.cwd);
 			const parsed = parseClaudeCommand(args, new Set(templates.keys()));
 			const resolved = resolveDefaults(parsed, templates);
+			const template = parsed.mode ? templates.get(parsed.mode) : undefined;
+			const dangerous =
+				parsed.mode === "general"
+					? false
+					: (template?.permissionMode ?? "acceptEdits") === "bypassPermissions";
 
 			if (!resolved) {
 				if (parsed.mode) {
@@ -575,6 +831,7 @@ export default function (pi: ExtensionAPI) {
 				model: parsed.model,
 				maxBudgetUsd: parsed.budget,
 				sessionId: parsed.sessionId,
+				pr: parsed.pr,
 				signal: ac.signal,
 				onStream: (t) => {
 					liveTail = (liveTail + t).slice(-400);
@@ -598,6 +855,7 @@ export default function (pi: ExtensionAPI) {
 							closeWindow = () => done(undefined);
 							return progressWindow(tui, theme, {
 								getLines,
+								dangerous,
 								onCancel: () => {
 									cancelled = true;
 									ac.abort();
@@ -651,17 +909,31 @@ export default function (pi: ExtensionAPI) {
 			const file = (details.file as string) ?? null;
 			const sessionId = (details.sessionId as string) ?? null;
 			const resumeHint = sessionId ? ` · resume: /claude --resume=${sessionId} <prompt>` : "";
-			const duration =
+
+			// metrics summary: turns · cost · tokens · context% · duration
+			const usage = details.usage as
+				| { inputTokens?: number; outputTokens?: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number }
+				| undefined;
+			const promptTokens = usage
+				? (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0)
+				: 0;
+			const metrics = [
+				`${(details.numTurns as number) ?? 0} turn(s)`,
+				`$${((details.totalCostUsd as number) ?? 0).toFixed(3)}`,
+				promptTokens > 0 ? `${Math.round(promptTokens / 1000)}k tok` : null,
+				typeof details.contextPercent === "number" ? `${(details.contextPercent as number).toFixed(1)}% ctx` : null,
 				typeof details.durationMs === "number" && details.durationMs !== null
-					? ` · ${((details.durationMs as number) / 1000).toFixed(1)}s`
-					: "";
+					? `${((details.durationMs as number) / 1000).toFixed(0)}s`
+					: null,
+			]
+				.filter((p): p is string => Boolean(p))
+				.join(" · ");
 
 			// inject the report into the session so the main agent consumes it
 			// on its next turn (participates in LLM context; full text in the file)
 			injectReport(ctx, {
 				mode: details.mode as string,
-				turns: (details.numTurns as number) ?? 0,
-				cost: (details.totalCostUsd as number) ?? 0,
+				metrics,
 				body: summary.text,
 				file: file ?? undefined,
 				sessionId: sessionId ?? undefined,
@@ -670,8 +942,7 @@ export default function (pi: ExtensionAPI) {
 			if (ctx.hasUI) {
 				ctx.ui.setStatus("claude-delegate", undefined);
 				ctx.ui.notify(
-					`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s)${duration}, $${((details.totalCostUsd as number) ?? 0).toFixed(3)}${resumeHint}` +
-						` · transcript: ${file}`,
+					`claude ${details.mode} done — ${metrics}${resumeHint}` + ` · transcript: ${file}`,
 					"info",
 				);
 			} else {

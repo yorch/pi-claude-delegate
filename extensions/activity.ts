@@ -1,3 +1,5 @@
+import { readdirSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { ActivityEvent } from "./stream-parse.ts";
 
 function truncate(s: string, max: number): string {
@@ -8,6 +10,28 @@ function truncate(s: string, max: number): string {
 export function safeSegmentName(name: string): string {
 	const safe = name.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
 	return safe.length > 0 ? safe : "delegate";
+}
+
+/** Delete oldest transcript files beyond `maxCount` (0 = keep everything). */
+export function pruneOutputs(dir: string, maxCount: number): void {
+	if (maxCount <= 0) return;
+	let files: string[];
+	try {
+		files = readdirSync(dir);
+	} catch {
+		return;
+	}
+	const byMtime = files
+		.filter((f) => f.endsWith(".md"))
+		.map((f) => ({ f, mtime: statSync(join(dir, f), { throwIfNoEntry: false })?.mtimeMs ?? 0 }))
+		.sort((a, b) => b.mtime - a.mtime);
+	for (const { f } of byMtime.slice(maxCount)) {
+		try {
+			rmSync(join(dir, f));
+		} catch {
+			// best-effort
+		}
+	}
 }
 
 /** Human-readable one-liner for a tool call (uses Claude's `description` when present). */

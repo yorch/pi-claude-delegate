@@ -90,7 +90,9 @@ chat → you ask "what should we fix first?" and the main agent answers from it.
 - **Live activity feed** — while a delegation runs, the tool box streams what
   Claude is doing: `▶ Bash: List all tracked files in repo ✓`, `💭 thinking…`,
   and a tail of the answer as it forms. The `/claude` command opens a
-  **floating progress window** with the same feed (spinner; `esc` twice
+  **floating progress window** with the same feed (a red
+  `⚠ bypassPermissions` banner appears when a mode runs unrestricted; spinner;
+  `esc` twice
   cancels — first press arms, second confirms within 1.5s, so a stray tap
   never kills the run; `m` **minimizes** — the window hides while the run
   continues in the background, footer chip keeps updating; re-open with
@@ -125,13 +127,24 @@ All optional — in `~/.pi/agent/settings.json`:
     "allowDangerous": false,
     "inspectThinking": false,
     "maxBudgetUsd": 3,
-    "autoDelegateHints": false
+    "autoDelegateHints": false,
+    "modelAliases": { "economy": "haiku", "balanced": "sonnet", "max": "opus" },
+    "maxConcurrent": 1,
+    "maxTranscripts": 100
   }
 }
 ```
 
 `maxBudgetUsd` is a global default spend cap — per-call (`maxBudgetUsd` /
 `--budget=`), per-template (frontmatter), then config, in that order.
+
+- **`modelAliases`** — templates may use `model: economy|balanced|max` (or any
+  alias you define) instead of a literal; resolution: call → template → config,
+  each alias-resolved.
+- **`maxConcurrent`** — cap on overlapping delegated runs (default 1; each run
+  costs money).
+- **`maxTranscripts`** — oldest transcripts pruned beyond this count
+  (default 100; `0` disables).
 
 ### `autoDelegateHints` — inert by default
 
