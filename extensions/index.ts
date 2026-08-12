@@ -23,6 +23,7 @@ import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@ear
 import { Container, Markdown, Text, type Component } from "@earendil-works/pi-tui";
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
 import { parseClaudeCommand } from "./command.ts";
+import { delegationHint, stripMarker } from "./hint.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
 import { buildTranscript, collectActivityLog, formatToolUse } from "./activity.ts";
@@ -37,6 +38,8 @@ interface DelegateConfig {
 	inspectThinking: boolean;
 	/** Global default spend cap in USD (overridable per call / per template). */
 	maxBudgetUsd?: number;
+	/** Hint on imperative review/plan/audit phrasing (explicit markers always work). */
+	autoDelegateHints: boolean;
 }
 
 interface DelegateOptions {
@@ -62,6 +65,7 @@ function loadConfig(): DelegateConfig {
 		defaultMode: "general",
 		allowDangerous: false,
 		inspectThinking: false,
+		autoDelegateHints: false,
 	};
 	try {
 		const file = join(agentDir(), "settings.json");
@@ -74,6 +78,7 @@ function loadConfig(): DelegateConfig {
 		if (typeof c.allowDangerous === "boolean") cfg.allowDangerous = c.allowDangerous;
 		if (typeof c.inspectThinking === "boolean") cfg.inspectThinking = c.inspectThinking;
 		if (typeof c.maxBudgetUsd === "number" && c.maxBudgetUsd > 0) cfg.maxBudgetUsd = c.maxBudgetUsd;
+		if (typeof c.autoDelegateHints === "boolean") cfg.autoDelegateHints = c.autoDelegateHints;
 	} catch {
 		// invalid settings — fall back to defaults
 	}
@@ -270,12 +275,15 @@ export default function (pi: ExtensionAPI) {
 		name: "claude_delegate",
 		label: "Claude Delegate",
 		description:
-			"Delegate a task to Claude Code (headless) and return its report. Use for code reviews, detailed plans, security audits, docs, or implementation the user wants Claude to own. Modes come from templates (review, plan, implement, security-audit, docs, general, or custom).",
-		promptSnippet: "Delegate a subtask to Claude Code (reviews, plans, audits, docs, implementation)",
+			"Delegate a task to Claude Code running headless in the repo and return its streamed report (cost, token usage, context %, session id). " +
+			"`mode` selects a template: review, plan, implement, security-audit, docs, general, or a custom template name — it determines permissions (review/plan/security-audit are read-only; implement/docs/general auto-accept file edits). " +
+			"`scope` restricts the work: \"diff\" for the current git diff, a path list, or omit for the whole repo. `sessionId` continues an earlier delegated session.",
+		promptSnippet: "Delegate a subtask to Claude Code and return its report",
 		promptGuidelines: [
-			"Use claude_delegate when the user asks for a code review, a detailed plan, a security audit, or wants work delegated to Claude Code.",
-			"Pass a focused task string — include the intent and any constraints. Use scope: \"diff\" to review the current git diff, a path list to restrict, or omit for the whole repo.",
-			"Prefer mode \"review\"/\"plan\"/\"security-audit\" (read-only) unless the user asked for changes — then use \"implement\".",
+			"claude_delegate runs Claude Code headless in the working directory and returns a streamed report with cost, token usage, and a session id for follow-ups.",
+			"Pass a focused task string with intent and constraints. Use scope: \"diff\" for the current git diff, a path list to restrict, or omit for the whole repo.",
+			"mode selects the template and its permission level: review/plan/security-audit are read-only; implement/docs/general auto-accept file edits. Custom template names also work.",
+			"sessionId resumes a previous delegated session instead of starting fresh.",
 			"Do not set allowDangerous unless the user explicitly asks for unrestricted access.",
 		],
 		parameters: Type.Object({
@@ -543,5 +551,15 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 		},
+	});
+
+	// ── Input hint ───────────────────────────────────────────────────────────
+	// Explicit markers (@claude, "…with claude", "delegate … to claude") always
+	// add a delegation hint; keyword phrasing only when autoDelegateHints is on.
+	pi.on("input", async (event, ctx) => {
+		if (event.source === "extension") return { action: "continue" };
+		const hint = delegationHint(event.text, { autoDelegateHints: loadConfig().autoDelegateHints });
+		if (!hint) return { action: "continue" };
+		return { action: "transform", text: `${stripMarker(event.text)}\n\n${hint}` };
 	});
 }

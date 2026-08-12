@@ -116,13 +116,29 @@ All optional — in `~/.pi/agent/settings.json`:
     "defaultMode": "general",
     "allowDangerous": false,
     "inspectThinking": false,
-    "maxBudgetUsd": 3
+    "maxBudgetUsd": 3,
+    "autoDelegateHints": false
   }
 }
 ```
 
 `maxBudgetUsd` is a global default spend cap — per-call (`maxBudgetUsd` /
 `--budget=`), per-template (frontmatter), then config, in that order.
+
+### `autoDelegateHints` — inert by default
+
+The extension never nudges the agent toward this tool unless you opt in. The
+tool exists in the agent's tool list with a neutral description (it may still
+be chosen on its own judgment), but:
+
+- **`autoDelegateHints: false` (default)** — user input is never touched. No
+  system-prompt bias, no hint injection. Delegation happens via the `/claude`
+  command or when the agent chooses the tool itself.
+- **`autoDelegateHints: true`** — the input hook recognizes delegation intent
+  and appends a hint for the agent: explicit markers (`@claude`, "…with claude",
+  "delegate … to claude" — the `@claude` marker is stripped) and imperative
+  review/plan/audit/docs phrasing. Already-explicit references to
+  `claude_delegate` or `/claude` are never re-hinted.
 
 ## Metrics recorded
 
