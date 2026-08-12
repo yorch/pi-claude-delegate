@@ -9,6 +9,8 @@ export interface ClaudeCommandArgs {
 	model?: string;
 	scope?: string;
 	budget?: number;
+	/** Resume an existing delegated session (--resume=<id>). */
+	sessionId?: string;
 }
 
 export function parseClaudeCommand(raw: string, knownModes: ReadonlySet<string>): ClaudeCommandArgs {
@@ -33,5 +35,6 @@ export function parseClaudeCommand(raw: string, knownModes: ReadonlySet<string>)
 	if (flags.model) out.model = flags.model;
 	if (flags.scope) out.scope = flags.scope;
 	if (flags.budget !== undefined) out.budget = Number(flags.budget);
+	if (flags.resume) out.sessionId = flags.resume;
 	return out;
 }

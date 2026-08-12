@@ -38,7 +38,43 @@ test("extracts text deltas and the final result", () => {
 });
 
 test("handles malformed lines gracefully", () => {
-	const { streamedText, result } = parseStreamLines(["not json", "", "{}", "null"]);
+	const { streamedText, result, activities } = parseStreamLines(["not json", "", "{}", "null"]);
 	assert.equal(streamedText, "");
 	assert.equal(result, null);
+	assert.deepEqual(activities, []);
+});
+
+test("extracts tool activity from the stream", () => {
+	const lines = [
+		JSON.stringify({
+			type: "stream_event",
+			event: {
+				type: "content_block_start",
+				content_block: { type: "tool_use", id: "t1", name: "Bash", input: {} },
+			},
+		}),
+		JSON.stringify({
+			type: "assistant",
+			message: {
+				content: [
+					{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls", description: "List files" } },
+				],
+			},
+		}),
+		JSON.stringify({
+			type: "user",
+			message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "a.ts\nb.ts", is_error: false }] },
+		}),
+		JSON.stringify({
+			type: "stream_event",
+			event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "hmm" } },
+		}),
+	];
+	const { activities } = parseStreamLines(lines);
+	assert.deepEqual(activities, [
+		{ kind: "tool_start", name: "Bash" },
+		{ kind: "tool_input", name: "Bash", input: { command: "ls", description: "List files" } },
+		{ kind: "tool_result", isError: false },
+		{ kind: "thinking", chars: 3 },
+	]);
 });

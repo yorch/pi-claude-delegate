@@ -18,19 +18,34 @@ export interface StreamedResult {
 	usage: StreamedUsage | null;
 }
 
+/** Structured events describing what the delegated Claude is doing. */
+export type ActivityEvent =
+	| { kind: "tool_start"; name: string }
+	| { kind: "tool_input"; name: string; input: Record<string, unknown> }
+	| { kind: "tool_result"; isError: boolean }
+	| { kind: "thinking"; chars: number };
+
 export interface StreamParseOutcome {
 	/** Accumulated text from content_block_delta / text_delta events. */
 	streamedText: string;
+	/** The final `result` line, if seen. */
 	result: StreamedResult | null;
+	/** Tool/thinking activity observed on this line. */
+	activities: ActivityEvent[];
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /**
  * Feed JSONL lines from `claude -p --output-format stream-json --verbose`.
- * Returns the live-streamed text and the final `result` line (if seen).
+ * Returns live-streamed text, tool/thinking activity, and the final result.
  */
 export function parseStreamLines(lines: Iterable<string>): StreamParseOutcome {
 	let streamedText = "";
 	let result: StreamedResult | null = null;
+	const activities: ActivityEvent[] = [];
 
 	for (const line of lines) {
 		let o: unknown;
@@ -39,39 +54,64 @@ export function parseStreamLines(lines: Iterable<string>): StreamParseOutcome {
 		} catch {
 			continue;
 		}
-		if (!o || typeof o !== "object") continue;
-		const rec = o as Record<string, unknown>;
+		if (!isRecord(o)) continue;
 
-		if (rec.type === "stream_event") {
-			const ev = (rec.event ?? {}) as Record<string, unknown>;
-			if (
+		if (o.type === "stream_event" && isRecord(o.event)) {
+			const ev = o.event;
+			const delta = isRecord(ev.delta) ? ev.delta : undefined;
+
+			if (ev.type === "content_block_delta" && delta?.type === "text_delta" && typeof delta.text === "string") {
+				streamedText += delta.text;
+			} else if (
 				ev.type === "content_block_delta" &&
-				(ev.delta as Record<string, unknown> | undefined)?.type === "text_delta"
+				delta?.type === "thinking_delta" &&
+				typeof delta.thinking === "string"
 			) {
-				const text = (ev.delta as Record<string, unknown>).text;
-				if (typeof text === "string") streamedText += text;
+				activities.push({ kind: "thinking", chars: delta.thinking.length });
+			} else if (ev.type === "content_block_start" && isRecord(ev.content_block)) {
+				const cb = ev.content_block;
+				if (cb.type === "tool_use" && typeof cb.name === "string") {
+					activities.push({ kind: "tool_start", name: cb.name });
+				}
 			}
-		} else if (rec.type === "result") {
-			const u = (rec.usage ?? null) as Record<string, number> | null;
+		} else if (o.type === "assistant" && isRecord(o.message)) {
+			// full tool_use blocks carry the complete input
+			for (const block of Array.isArray(o.message.content) ? o.message.content : []) {
+				if (isRecord(block) && block.type === "tool_use" && typeof block.name === "string") {
+					activities.push({
+						kind: "tool_input",
+						name: block.name,
+						input: isRecord(block.input) ? block.input : {},
+					});
+				}
+			}
+		} else if (o.type === "user" && isRecord(o.message)) {
+			for (const block of Array.isArray(o.message.content) ? o.message.content : []) {
+				if (isRecord(block) && block.type === "tool_result") {
+					activities.push({ kind: "tool_result", isError: block.is_error === true });
+				}
+			}
+		} else if (o.type === "result") {
+			const u = isRecord(o.usage) ? o.usage : null;
 			result = {
-				result: typeof rec.result === "string" ? rec.result : streamedText,
-				isError: rec.is_error === true,
-				numTurns: typeof rec.num_turns === "number" ? rec.num_turns : 0,
-				totalCostUsd: typeof rec.total_cost_usd === "number" ? rec.total_cost_usd : 0,
-				sessionId: typeof rec.session_id === "string" ? rec.session_id : null,
-				stopReason: typeof rec.stop_reason === "string" ? rec.stop_reason : null,
-				permissionDenials: Array.isArray(rec.permission_denials) ? rec.permission_denials : [],
+				result: typeof o.result === "string" ? o.result : streamedText,
+				isError: o.is_error === true,
+				numTurns: typeof o.num_turns === "number" ? o.num_turns : 0,
+				totalCostUsd: typeof o.total_cost_usd === "number" ? o.total_cost_usd : 0,
+				sessionId: typeof o.session_id === "string" ? o.session_id : null,
+				stopReason: typeof o.stop_reason === "string" ? o.stop_reason : null,
+				permissionDenials: Array.isArray(o.permission_denials) ? o.permission_denials : [],
 				usage: u
 					? {
-							inputTokens: u.input_tokens ?? 0,
-							outputTokens: u.output_tokens ?? 0,
-							cacheCreationInputTokens: u.cache_creation_input_tokens ?? 0,
-							cacheReadInputTokens: u.cache_read_input_tokens ?? 0,
+							inputTokens: typeof u.input_tokens === "number" ? u.input_tokens : 0,
+							outputTokens: typeof u.output_tokens === "number" ? u.output_tokens : 0,
+							cacheCreationInputTokens: typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : 0,
+							cacheReadInputTokens: typeof u.cache_read_input_tokens === "number" ? u.cache_read_input_tokens : 0,
 						}
 					: null,
 			};
 		}
 	}
 
-	return { streamedText, result };
+	return { streamedText, result, activities };
 }

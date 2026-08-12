@@ -24,8 +24,8 @@ CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
 
 - `extensions/index.ts` — entry. Registers the `claude_delegate` tool and the
   `/claude` command, reads `claudeDelegate` config from `~/.pi/agent/settings.json`,
-  builds prompts, saves long outputs. The `delegate()` helper is the shared
-  engine for tool + command.
+  builds prompts, writes full transcripts, renders the live inspection feed.
+  The `delegate()` helper is the shared engine for tool + command.
 - `extensions/run-claude.ts` — subprocess runner. Spawns
   `claude -p --output-format stream-json --verbose --include-partial-messages
   --no-session-persistence --permission-mode <mode>`, parses JSONL lines via
@@ -34,6 +34,8 @@ CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
 - `extensions/stream-parse.ts` — pure JSONL parser (text deltas + result
   extraction). Unit-tested; keep it free of IO.
 - `extensions/templates.ts` — template discovery + frontmatter parsing.
+- `extensions/activity.ts` — live-feed formatters (`formatToolUse`), transcript builder.
+- `extensions/command.ts` — pure parser for `/claude` (`--flags` + first-word mode).
   Built-ins ship in `templates/*.md`; users add custom templates in
   `~/.pi/agent/claude-delegate/templates/` (global) and
   `<cwd>/.pi/claude-delegate/templates/` (project). Later sources override

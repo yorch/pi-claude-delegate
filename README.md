@@ -66,6 +66,25 @@ Any registered template name becomes a valid `mode` for the tool and `/claude --
 
 **Skills:** delegated Claude runs with `cwd` = your repo, so `.claude/skills/` in the repo are automatically available. Pin one with `skill: <name>` in a template's frontmatter.
 
+## Inspecting what Claude is doing
+
+- **Live activity feed** — while a delegation runs, the tool box streams what
+  Claude is doing: `▶ Bash: List all tracked files in repo ✓`, `💭 thinking…`,
+  and a tail of the answer as it forms.
+- **Full transcript every run** — the complete output plus a tool-activity log
+  and metadata is written to `~/.pi/agent/claude-delegate/outputs/` (never in
+  your repo). The tool result always ends with the transcript path.
+- **Resume a session** — every run records a session id. Continue headlessly:
+
+  ```bash
+  /claude --resume=<session-id> follow up on the review
+  ```
+
+  or interactively with `claude --resume <session-id>` in your terminal.
+
+  Reveal Claude's thinking live with `"inspectThinking": true` in the
+  `claudeDelegate` config (off by default).
+
 ## Config
 
 All optional — in `~/.pi/agent/settings.json`:
@@ -76,7 +95,8 @@ All optional — in `~/.pi/agent/settings.json`:
     "model": "sonnet",
     "timeoutMs": 600000,
     "defaultMode": "general",
-    "allowDangerous": false
+    "allowDangerous": false,
+    "inspectThinking": false
   }
 }
 ```

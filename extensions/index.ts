@@ -24,12 +24,16 @@ import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.t
 import { parseClaudeCommand } from "./command.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
+import { buildTranscript, collectActivityLog, formatToolUse } from "./activity.ts";
+import type { ActivityEvent } from "./stream-parse.ts";
 
 interface DelegateConfig {
 	model?: string;
 	timeoutMs: number;
 	defaultMode: string;
 	allowDangerous: boolean;
+	/** Reveal Claude's thinking deltas in the live feed (default off). */
+	inspectThinking: boolean;
 }
 
 interface DelegateOptions {
@@ -39,7 +43,9 @@ interface DelegateOptions {
 	model?: string;
 	maxBudgetUsd?: number;
 	allowDangerous?: boolean;
+	sessionId?: string;
 	onStream?: (text: string) => void;
+	onActivity?: (ev: ActivityEvent) => void;
 	signal?: AbortSignal;
 }
 
@@ -52,6 +58,7 @@ function loadConfig(): DelegateConfig {
 		timeoutMs: DEFAULT_TIMEOUT_MS,
 		defaultMode: "general",
 		allowDangerous: false,
+		inspectThinking: false,
 	};
 	try {
 		const file = join(agentDir(), "settings.json");
@@ -62,6 +69,7 @@ function loadConfig(): DelegateConfig {
 		if (typeof c.timeoutMs === "number" && c.timeoutMs > 0) cfg.timeoutMs = c.timeoutMs;
 		if (typeof c.defaultMode === "string") cfg.defaultMode = c.defaultMode;
 		if (typeof c.allowDangerous === "boolean") cfg.allowDangerous = c.allowDangerous;
+		if (typeof c.inspectThinking === "boolean") cfg.inspectThinking = c.inspectThinking;
 	} catch {
 		// invalid settings — fall back to defaults
 	}
@@ -102,7 +110,12 @@ async function delegate(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	opts: DelegateOptions,
-): Promise<{ content: string; details: Record<string, unknown>; result: ClaudeResult }> {
+): Promise<{
+	content: string;
+	details: Record<string, unknown>;
+	result: ClaudeResult;
+	activityLog: string[];
+}> {
 	const config = loadConfig();
 	const templates = loadTemplates(ctx.cwd);
 	const mode = opts.mode || config.defaultMode;
@@ -126,6 +139,7 @@ async function delegate(
 	const model = opts.model ?? template.model ?? config.model;
 	const prompt = buildPrompt(template, opts.task, scopeText, ctx.cwd);
 
+	const activityEvents: ActivityEvent[] = [];
 	const result = await runClaude({
 		prompt,
 		cwd: ctx.cwd,
@@ -134,12 +148,37 @@ async function delegate(
 		maxBudgetUsd: opts.maxBudgetUsd ?? template.maxBudgetUsd,
 		signal: opts.signal,
 		timeoutMs: config.timeoutMs,
+		resumeSessionId: opts.sessionId,
 		onStream: opts.onStream,
+		onActivity: (ev) => {
+			activityEvents.push(ev);
+			opts.onActivity?.(ev);
+		},
 	});
 
 	if (result.isError && !result.result && !result.streamedText) {
 		throw new Error("claude reported an error and produced no output");
 	}
+
+	// full transcript is always written — the record for post-hoc inspection
+	const activityLog = collectActivityLog(activityEvents);
+	const file = saveOutput(
+		mode,
+		buildTranscript({
+			mode,
+			permissionMode,
+			model: model ?? null,
+			cwd: ctx.cwd,
+			sessionId: result.sessionId,
+			resumed: Boolean(opts.sessionId),
+			numTurns: result.numTurns,
+			totalCostUsd: result.totalCostUsd,
+			isError: result.isError,
+			stopReason: result.stopReason,
+			activityLog,
+			output: result.result || result.streamedText,
+		}),
+	);
 
 	return {
 		content: result.result || result.streamedText || "(empty result)",
@@ -153,8 +192,11 @@ async function delegate(
 			stopReason: result.stopReason,
 			permissionDenials: result.permissionDenials,
 			isError: result.isError,
+			resumed: Boolean(opts.sessionId),
+			file,
 		},
 		result,
+		activityLog,
 	};
 }
 
@@ -193,6 +235,12 @@ export default function (pi: ExtensionAPI) {
 			),
 			model: Type.Optional(Type.String({ description: "Claude model (e.g. sonnet, opus). Defaults to template/config." })),
 			maxBudgetUsd: Type.Optional(Type.Number({ description: "Hard spend cap in USD for the run." })),
+			sessionId: Type.Optional(
+				Type.String({
+					description:
+						"Resume an existing delegated Claude session (pass its session id from a previous run's details).",
+				}),
+			),
 			allowDangerous: Type.Optional(
 				Type.Boolean({
 					description:
@@ -208,10 +256,29 @@ export default function (pi: ExtensionAPI) {
 			model?: string;
 			maxBudgetUsd?: number;
 			allowDangerous?: boolean;
+			sessionId?: string;
 		}, signal: AbortSignal | undefined, onUpdate, ctx: ExtensionContext) {
 			const config = loadConfig();
-			let lastPush = 0;
-			let streamed = 0;
+
+			// live inspection feed: recent tool calls + thinking indicator + text tail
+			const feed: string[] = [];
+			let liveTail = "";
+			let thinkingChars = 0;
+			let lastPushAt = 0;
+			const THROTTLE_MS = 250;
+
+			const pushFeed = () => {
+				const now = Date.now();
+				if (now - lastPushAt < THROTTLE_MS) return;
+				lastPushAt = now;
+				const lines: string[] = [...feed.slice(-6)];
+				if (thinkingChars > 0) {
+					lines.push(config.inspectThinking ? `💭 thinking… (${thinkingChars} chars)` : "💭 thinking…");
+				}
+				if (liveTail) lines.push(`✍ ${liveTail}`);
+				if (lines.length === 0) return;
+				onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: { progress: 0.5 } });
+			};
 
 			const { content, details, result } = await delegate(pi, ctx, {
 				task: params.task,
@@ -220,31 +287,38 @@ export default function (pi: ExtensionAPI) {
 				model: params.model,
 				maxBudgetUsd: params.maxBudgetUsd,
 				allowDangerous: params.allowDangerous ?? config.allowDangerous,
+				sessionId: params.sessionId,
 				signal,
 				onStream: (text) => {
-					streamed += text.length;
-					// throttle live updates (~every 150 chars)
-					if (streamed - lastPush > 150) {
-						lastPush = streamed;
-						onUpdate?.({
-							content: [{ type: "text", text: "claude is working…" }],
-							details: { progress: 0.5 },
-						});
+					liveTail = (liveTail + text).slice(-400);
+					pushFeed();
+				},
+				onActivity: (ev) => {
+					if (ev.kind === "tool_input") {
+						feed.push(`▶ ${formatToolUse(ev.name, ev.input)}`);
+					} else if (ev.kind === "tool_result") {
+						const last = feed.length - 1;
+						if (last >= 0 && feed[last].startsWith("▶")) feed[last] += ev.isError ? " ✗" : " ✓";
+					} else if (ev.kind === "thinking") {
+						thinkingChars += ev.chars;
 					}
+					pushFeed();
 				},
 			});
 
 			const summary = summarize(content);
-			if (summary.truncated) {
-				const file = saveOutput(details.mode as string, content);
-				details.file = file;
-			}
-
-			const head = result.isError ? "⚠ claude reported an error" : `claude ${details.mode} (${result.numTurns} turn(s), $${result.totalCostUsd.toFixed(3)})`;
+			const resumed = details.resumed ? " · resumed" : "";
+			const head = result.isError
+				? "⚠ claude reported an error"
+				: `claude ${details.mode} (${result.numTurns} turn(s), $${result.totalCostUsd.toFixed(3)})${resumed}`;
 			const body = result.isError ? `\n${summary.text}` : `\n\n${summary.text}`;
+			const footer =
+				summary.truncated
+					? `\nFull output: ${details.file}`
+					: `\nTranscript: ${details.file}`;
 
 			return {
-				content: [{ type: "text", text: `${head}${body}${summary.truncated ? `\nFull output: ${details.file}` : ""}` }],
+				content: [{ type: "text", text: `${head}${body}${footer}` }],
 				details,
 				usage: result.usage ? mapClaudeUsage({ ...result.usage, totalCostUsd: result.totalCostUsd }) : undefined,
 			};
@@ -254,7 +328,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Command ──────────────────────────────────────────────────────────────
 	pi.registerCommand("claude", {
 			description:
-				"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] <prompt> — or use a mode name as the first word: /claude review <prompt>",
+				"Delegate a task to Claude Code. Usage: /claude [--mode=review|plan|implement|security-audit|docs|general] [--model=sonnet] [--scope=diff|paths] [--resume=<session-id>] <prompt> — or use a mode name as the first word: /claude review <prompt>",
 		handler: async (args, ctx) => {
 			const parsed = parseClaudeCommand(args, new Set(loadTemplates(ctx.cwd).keys()));
 			const { task, mode } = parsed;
@@ -279,16 +353,19 @@ export default function (pi: ExtensionAPI) {
 					scope: parsed.scope,
 					model: parsed.model,
 					maxBudgetUsd: parsed.budget,
+					sessionId: parsed.sessionId,
 				});
 
 				const summary = summarize(content);
-				const file = summary.truncated ? saveOutput(details.mode as string, content) : null;
+				const file = (details.file as string) ?? null;
+				const sessionId = (details.sessionId as string) ?? null;
+				const resumeHint = sessionId ? ` · resume: /claude --resume=${sessionId} <prompt>` : "";
 
 				if (ctx.hasUI) {
 					ctx.ui.setStatus("claude-delegate", undefined);
 					ctx.ui.notify(
-						`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s), $${((details.totalCostUsd as number) ?? 0).toFixed(3)}` +
-							(file ? ` · full output: ${file}` : ""),
+						`claude ${details.mode} done — ${(details.numTurns as number) ?? 0} turn(s), $${((details.totalCostUsd as number) ?? 0).toFixed(3)}${resumeHint}` +
+							` · transcript: ${file}`,
 						"info",
 					);
 				} else {
