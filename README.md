@@ -90,8 +90,10 @@ chat → you ask "what should we fix first?" and the main agent answers from it.
 - **Live activity feed** — while a delegation runs, the tool box streams what
   Claude is doing: `▶ Bash: List all tracked files in repo ✓`, `💭 thinking…`,
   and a tail of the answer as it forms. The `/claude` command opens a
-  **floating progress window** with the same feed (a red
-  `⚠ bypassPermissions` banner appears when a mode runs unrestricted; spinner;
+  **framed progress window** with the same feed — a bordered
+  modal showing `⠋ claude <mode> · <model> · ⏱ elapsed`, per-kind styling
+  (accent tool calls with ✓/✗, dim thinking, streaming text), a red
+  `⚠ bypassPermissions` banner when a mode runs unrestricted, and a hint row;
   `esc` twice
   cancels — first press arms, second confirms within 1.5s, so a stray tap
   never kills the run; `m` **minimizes** — the window hides while the run

@@ -1,24 +1,68 @@
 /**
- * Live progress window for `/claude` runs — a floating overlay showing the
+ * Live progress window for `/claude` runs — a framed overlay showing the
  * activity feed, thinking indicator and text tail while the delegation runs.
- * ESC cancels (aborts the claude subprocess via the caller's AbortController).
+ *
+ * Controls:
+ *   - ESC twice: cancel (first press arms, second confirms within 1.5s)
+ *   - `m`: minimize (hide the window, run continues in the background;
+ *     re-show with `/claude watch`)
  */
 
-import { Key, matchesKey, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import {
+	Key,
+	matchesKey,
+	truncateToWidth,
+	visibleWidth,
+	type Component,
+	type TUI,
+} from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPIN_INTERVAL_MS = 100;
+const MAX_VISIBLE_ENTRIES = 12;
+
+export type FeedEntry =
+	| { kind: "tool"; text: string; ok?: boolean }
+	| { kind: "thinking"; text: string }
+	| { kind: "text"; text: string };
 
 export interface ProgressWindowOptions {
-	/** Live content lines (tool feed, thinking, text tail). */
-	getLines: () => string[];
+	/** Mode name, shown in the title bar (e.g. "review"). */
+	mode: string;
+	/** Model (or alias) shown in the title bar. */
+	model?: string | null;
+	/** Epoch ms when the run started — drives the live elapsed timer. */
+	startedAt: number;
+	/** Live feed entries (tool calls, thinking, text tail). */
+	getEntries: () => FeedEntry[];
 	/** Show an "unrestricted permissions" warning banner. */
 	dangerous?: boolean;
-	/** Called when the user presses ESC. */
+	/** Called when the user confirms cancel. */
 	onCancel: () => void;
-	/** Called when the user presses `m` (minimize — hide the window, keep the run going). */
+	/** Called when the user presses `m` (minimize — keep the run going). */
 	onMinimize: () => void;
+}
+
+export function fmtElapsed(ms: number): string {
+	const total = Math.max(0, Math.floor(ms / 1000));
+	const m = Math.floor(total / 60);
+	const s = total % 60;
+	return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `0:${String(s).padStart(2, "0")}`;
+}
+
+/** Style one feed entry; the returned string may contain ANSI colors. */
+export function renderEntry(entry: FeedEntry, theme: Theme): string {
+	switch (entry.kind) {
+		case "tool": {
+			const mark = entry.ok === undefined ? "" : entry.ok ? theme.fg("success", " ✓") : theme.fg("error", " ✗");
+			return theme.fg("accent", "▶ ") + theme.fg("muted", entry.text) + mark;
+		}
+		case "thinking":
+			return theme.fg("dim", entry.text);
+		case "text":
+			return theme.fg("text", entry.text);
+	}
 }
 
 /** Create the overlay component; disposes the spinner timer. */
@@ -41,19 +85,35 @@ export function progressWindow(tui: TUI, theme: Theme, opts: ProgressWindowOptio
 
 	return {
 		render(width: number): string[] {
-			const header = theme.fg("accent", `${SPINNER[frame % SPINNER.length]} claude delegate`);
-			const lines = opts.getLines();
-			const body = lines.slice(-12).map((l) => theme.fg("muted", truncateToWidth(l, width)));
-			const out: string[] = [header];
+			const inner = Math.max(10, width - 4);
+			const padTo = (s: string, w: number) => `${s}${" ".repeat(Math.max(1, w - visibleWidth(s)))}`;
+			const out: string[] = [];
+
+			// title bar: ⠋ claude <mode> · <model> · ⏱ elapsed
+			const title = `${SPINNER[frame % SPINNER.length]} claude ${opts.mode}`;
+			const status = [opts.model ?? "", `⏱ ${fmtElapsed(Date.now() - opts.startedAt)}`].filter(Boolean).join(" · ");
+			const titleStr = status ? `${title} · ${status}` : title;
+			const dash = "─".repeat(Math.max(1, inner - visibleWidth(titleStr) - 2));
+			out.push(theme.fg("accent", `╭─ ${titleStr} ${dash}─╮`));
+
+			// danger banner
 			if (opts.dangerous) {
-				out.push(theme.fg("error", "⚠ bypassPermissions — unrestricted access"));
+				const banner = theme.fg("error", "⚠ bypassPermissions — unrestricted access");
+				out.push(`│ ${padTo(banner, inner)} │`);
 			}
-			out.push(...body);
-			// double-ESC guard: first press arms cancel, second confirms
+
+			// feed
+			for (const entry of opts.getEntries().slice(-MAX_VISIBLE_ENTRIES)) {
+				out.push(`│ ${padTo(truncateToWidth(renderEntry(entry, theme), inner), inner)} │`);
+			}
+
+			// hint row (double-ESC guard + minimize)
 			const hint = armed
 				? theme.fg("warning", "press esc again to cancel") + theme.fg("dim", " · m minimize")
-				: theme.fg("dim", "esc cancel · m minimize");
-			out.push("", hint);
+				: theme.fg("dim", "esc cancel") + theme.fg("dim", " · m minimize");
+			out.push(`│ ${padTo(hint, inner)} │`);
+
+			out.push(theme.fg("accent", `╰${"─".repeat(Math.max(1, width - 2))}╯`));
 			return out;
 		},
 		handleInput(data: string): void {

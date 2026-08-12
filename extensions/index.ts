@@ -35,7 +35,7 @@ import {
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
 import { parseClaudeCommand, resolveDefaults } from "./command.ts";
 import { delegationHint, stripMarker } from "./hint.ts";
-import { progressWindow } from "./progress.ts";
+import { progressWindow, type FeedEntry } from "./progress.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
 import { mapClaudeUsage } from "./usage.ts";
 import {
@@ -773,15 +773,15 @@ export default function (pi: ExtensionAPI) {
 			const { mode } = parsed;
 
 			// shared live state for the footer chip and the progress window
-			const feed: string[] = [];
+			const feed: FeedEntry[] = [];
 			let thinkingChars = 0;
 			let liveTail = "";
 			let requestRender: (() => void) | null = null;
-			const getLines = () => {
-				const lines = [...feed.slice(-12)];
-				if (thinkingChars > 0) lines.push("💭 thinking…");
-				if (liveTail) lines.push(`✍ ${liveTail.slice(-200)}`);
-				return lines;
+			const getEntries = (): FeedEntry[] => {
+				const entries = [...feed.slice(-12)];
+				if (thinkingChars > 0) entries.push({ kind: "thinking", text: "💭 thinking…" });
+				if (liveTail) entries.push({ kind: "text", text: liveTail.slice(-200) });
+				return entries;
 			};
 
 			let chipActivity = "";
@@ -799,12 +799,12 @@ export default function (pi: ExtensionAPI) {
 			const onActivity = (ev: ActivityEvent) => {
 				if (ev.kind === "tool_input") {
 					chipActivity = `▶ ${formatToolUse(ev.name, ev.input)}`;
-					feed.push(chipActivity);
+					feed.push({ kind: "tool", text: formatToolUse(ev.name, ev.input) });
 					if (feed.length > 40) feed.splice(0, feed.length - 40);
 				} else if (ev.kind === "tool_result") {
 					if (chipActivity.startsWith("▶")) chipActivity += ev.isError ? " ✗" : " ✓";
 					const last = feed.length - 1;
-					if (last >= 0 && feed[last].startsWith("▶")) feed[last] += ev.isError ? " ✗" : " ✓";
+					if (last >= 0 && feed[last].kind === "tool") feed[last] = { ...feed[last], ok: ev.isError ? false : true };
 				} else if (ev.kind === "thinking") {
 					chipActivity = "💭 thinking…";
 					thinkingChars += ev.chars;
@@ -852,7 +852,10 @@ export default function (pi: ExtensionAPI) {
 							requestRender = () => tui.requestRender();
 							closeWindow = () => done(undefined);
 							return progressWindow(tui, theme, {
-								getLines,
+								mode: mode ?? "general",
+								model: parsed.model ?? template?.model ?? loadConfig().model,
+								startedAt: Date.now(),
+								getEntries,
 								dangerous,
 								onCancel: () => {
 									cancelled = true;
