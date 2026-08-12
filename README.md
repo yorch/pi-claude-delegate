@@ -21,10 +21,13 @@ The pi agent uses the `claude_delegate` tool automatically when you ask for e.g.
 Manual delegation:
 
 ```bash
-/claude review: review the new auth flow
+/claude --mode=review review the new auth flow
 /claude --mode=security-audit --scope=auth/ audit the auth package
 /claude --mode=implement implement caching in the datasource layer
 ```
+
+Only the prompt is required; every `--flag` is optional (mode defaults to
+`defaultMode`, model to the template/config, scope to the whole repo).
 
 The `claude_delegate` tool takes: `task`, `mode`, `scope` (`"diff"` = current git diff, a path list, or omit for the whole repo), `model`, `maxBudgetUsd`, `allowDangerous`.
 
