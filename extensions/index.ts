@@ -19,7 +19,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Text, type Component } from "@earendil-works/pi-tui";
 import { runClaude, DEFAULT_TIMEOUT_MS, type ClaudeResult } from "./run-claude.ts";
 import { parseClaudeCommand } from "./command.ts";
 import { loadTemplates, type DelegateTemplate } from "./templates.ts";
@@ -317,11 +318,75 @@ export default function (pi: ExtensionAPI) {
 					? `\nFull output: ${details.file}`
 					: `\nTranscript: ${details.file}`;
 
+			// markdown body for the custom renderer (what the LLM sees in `content` stays as-is)
+			details.markdown = summary.text;
+
 			return {
 				content: [{ type: "text", text: `${head}${body}${footer}` }],
 				details,
 				usage: result.usage ? mapClaudeUsage({ ...result.usage, totalCostUsd: result.totalCostUsd }) : undefined,
 			};
+		},
+
+		// ── Custom rendering ──────────────────────────────────────────────────
+		renderCall(args, theme) {
+			const params = args as { mode?: string; task?: string };
+			const mode = params.mode ?? "general";
+			const task = params.task ?? "";
+			const taskStr = task ? ` — ${task.length > 60 ? `${task.slice(0, 59)}…` : task}` : "";
+			return new Text(theme.fg("accent", `claude ${mode}`) + theme.fg("dim", taskStr), 1, 1, (s) =>
+				theme.bg("toolPendingBg", s),
+			);
+		},
+
+		renderResult(result, options, theme): Component {
+			// while streaming, show the raw live feed (tool activity + text tail)
+			if (options.isPartial) {
+				const text = (result.content ?? [])
+					.filter((c) => c.type === "text")
+					.map((c) => c.text)
+					.join("\n");
+				return new Text(text, 1, 1, (s) => theme.bg("toolPendingBg", s));
+			}
+
+			const details = (result.details ?? {}) as Record<string, unknown>;
+			const mode = typeof details.mode === "string" ? details.mode : "delegate";
+			const cost = typeof details.totalCostUsd === "number" ? details.totalCostUsd : 0;
+			const turns = typeof details.numTurns === "number" ? details.numTurns : 0;
+			const isError = details.isError === true;
+			const resumed = details.resumed === true;
+			const file = typeof details.file === "string" ? details.file : null;
+			const sessionId = typeof details.sessionId === "string" ? details.sessionId : null;
+
+			const container = new Container();
+			container.addChild(
+				new Text(
+					theme.fg(isError ? "error" : "accent", `claude ${mode}`) +
+						theme.fg("dim", ` · ${turns} turn(s) · `) +
+						theme.fg("warning", `$${cost.toFixed(3)}`) +
+						(resumed ? theme.fg("dim", " · resumed") : ""),
+					1,
+					1,
+				),
+			);
+
+			const md = typeof details.markdown === "string" && details.markdown ? details.markdown : null;
+			if (md) {
+				container.addChild(new Markdown(md, 1, 1, getMarkdownTheme()));
+			} else {
+				const text = (result.content ?? [])
+					.filter((c) => c.type === "text")
+					.map((c) => c.text)
+					.join("\n");
+				container.addChild(new Text(text, 1, 1));
+			}
+
+			const foot: string[] = [];
+			if (file) foot.push(`Transcript: ${file}`);
+			if (sessionId) foot.push(`Resume: /claude --resume=${sessionId} <prompt>`);
+			if (foot.length > 0) container.addChild(new Text(theme.fg("dim", foot.join("   ")), 1, 1));
+
+			return container;
 		},
 	});
 
@@ -346,6 +411,19 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.setStatus("claude-delegate", ctx.ui.theme.fg("accent", "●") + ctx.ui.theme.fg("dim", ` claude ${mode ?? ""} running…`));
 			}
 
+			// live chip: latest activity shown in the footer while the run streams
+			let chipActivity = "";
+			let chipLastPush = 0;
+			const pushChip = () => {
+				if (!ctx.hasUI) return;
+				const now = Date.now();
+				if (now - chipLastPush < 500) return;
+				chipLastPush = now;
+				const theme = ctx.ui.theme;
+				const activity = chipActivity ? ` ${chipActivity}` : theme.fg("dim", " running…");
+				ctx.ui.setStatus("claude-delegate", theme.fg("accent", "●") + theme.fg("dim", ` claude ${mode ?? "general"}`) + activity);
+			};
+
 			try {
 				const { content, details } = await delegate(pi, ctx, {
 					task,
@@ -354,6 +432,17 @@ export default function (pi: ExtensionAPI) {
 					model: parsed.model,
 					maxBudgetUsd: parsed.budget,
 					sessionId: parsed.sessionId,
+					onStream: () => pushChip(),
+					onActivity: (ev) => {
+						if (ev.kind === "tool_input") {
+							chipActivity = `▶ ${formatToolUse(ev.name, ev.input)}`;
+						} else if (ev.kind === "tool_result") {
+							if (chipActivity.startsWith("▶")) chipActivity += ev.isError ? " ✗" : " ✓";
+						} else if (ev.kind === "thinking") {
+							chipActivity = "💭 thinking…";
+						}
+						pushChip();
+					},
 				});
 
 				const summary = summarize(content);

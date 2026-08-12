@@ -70,7 +70,11 @@ Any registered template name becomes a valid `mode` for the tool and `/claude --
 
 - **Live activity feed** — while a delegation runs, the tool box streams what
   Claude is doing: `▶ Bash: List all tracked files in repo ✓`, `💭 thinking…`,
-  and a tail of the answer as it forms.
+  and a tail of the answer as it forms. The `/claude` command mirrors the same
+  feed into the footer status chip.
+- **Formatted results** — completed delegations render with a custom tool box:
+  a colored head line (mode · turns · cost), the report as syntax-highlighted
+  markdown (theme-aware), and a transcript/resume footer.
 - **Full transcript every run** — the complete output plus a tool-activity log
   and metadata is written to `~/.pi/agent/claude-delegate/outputs/` (never in
   your repo). The tool result always ends with the transcript path.
