@@ -53,14 +53,17 @@ try {
           'Check `files` in package.json and that extensions/ exists.',
       );
     }
-    if (!hasTemplates) {
+    // templates/ is required for full delegate (pi-harness-delegate) but not for shim (pi-claude-delegate)
+    // - if manifest.files includes "templates", require it; otherwise warn
+    const wantsTemplates = Array.isArray(manifest.files) && manifest.files.includes('templates');
+    if (wantsTemplates && !hasTemplates) {
       fail(
         `Tarball for ${name}@${version} contains no files under templates/. ` +
           'Check `files` in package.json and that templates/ exists.',
       );
     }
     console.log(
-      `check-packables: ${name}@${version} — pack contains ${files.length} files, including extensions/ and templates/ ✓`,
+      `check-packables: ${name}@${version} — pack contains ${files.length} files, including extensions/${wantsTemplates ? ' and templates/' : ''} ✓`,
     );
     process.exit(0);
   } catch {
@@ -95,7 +98,8 @@ if (!hasExtensions) {
       `First 20 files in tarball:\n${list}`,
   );
 }
-if (!hasTemplates) {
+const wantsTemplates = Array.isArray(manifest.files) && manifest.files.includes('templates');
+if (wantsTemplates && !hasTemplates) {
   const list = files
     .slice(0, 20)
     .map(f => `  - ${f.path ?? f}`)
@@ -103,6 +107,7 @@ if (!hasTemplates) {
   fail(`Tarball for ${name}@${version} contains no files under templates/. ` + `First 20 files in tarball:\n${list}`);
 }
 
+const wantsTpl = Array.isArray(manifest.files) && manifest.files.includes('templates');
 console.log(
-  `check-packables: ${name}@${version} — pack contains ${files.length} files, including extensions/ and templates/ ✓`,
+  `check-packables: ${name}@${version} — pack contains ${files.length} files, including extensions/${wantsTpl ? ' and templates/' : ''} ✓`,
 );
