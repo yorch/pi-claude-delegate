@@ -5,7 +5,6 @@
   "type": "module",
   "files": [
     "extensions",
-    "templates",
     "README.md",
     "LICENSE"
   ],
