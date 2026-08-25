@@ -1,7 +1,7 @@
 {
   "name": "@yorch/pi-claude-delegate",
-  "version": "0.5.5",
-  "description": "Delegate work to Claude Code from the pi coding agent — code reviews, plans, implementation, security audits, docs, or your own custom templates.",
+  "version": "0.5.6",
+  "description": "[DEPRECATED] Delegate work to Claude Code — use pi-harness-delegate (pi install npm:pi-harness-delegate) — shim re-exporting claude harness.",
   "type": "module",
   "files": [
     "extensions",
@@ -36,6 +36,9 @@
     "changeset": "changeset",
     "version-packages": "changeset version && bun install",
     "release": "bun run verify && node scripts/check-packables.mjs && changeset publish"
+  },
+  "dependencies": {
+    "pi-harness-delegate": "^0.2.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
