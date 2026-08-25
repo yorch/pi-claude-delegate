@@ -1,3 +1,7 @@
+> [!WARNING]
+> **Deprecated — use [`pi-harness-delegate`](https://github.com/yorch/pi-harness-delegate) instead.**
+> `pi-claude-delegate` is now a thin wrapper around `pi-harness-delegate`'s `claude` harness. Install the new package for multi-harness support (Claude, Codex, OpenCode, Amp): `pi install npm:pi-harness-delegate` — see [Migration](https://github.com/yorch/pi-harness-delegate#migration-from-pi-claude-delegate).
+
 # pi-claude-delegate
 
 Delegate work to [Claude Code](https://github.com/anthropics/claude-code) from the [pi coding agent](https://github.com/badlogic/pi-mono): code reviews, detailed plans, implementation, security audits, docs — or your own custom templates.
