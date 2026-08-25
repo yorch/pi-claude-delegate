@@ -1,5 +1,11 @@
 # @yorch/pi-claude-delegate
 
+## 0.5.5
+
+### Patch Changes
+
+- [#3](https://github.com/yorch/pi-claude-delegate/pull/3) [`9d5691e`](https://github.com/yorch/pi-claude-delegate/commit/9d5691e7865ccd4f4a9d10e5a51c76ef08be57c1) Thanks [@yorch](https://github.com/yorch)! - Support Node 22, 24 and 26 (engines 22 || 24 || 26, @types/node 22.15.32, CI matrix 22/24/26, release stays 26)
+
 ## 0.5.4
 
 ### Patch Changes
