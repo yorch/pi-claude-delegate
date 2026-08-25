@@ -1,5 +1,11 @@
 # @yorch/pi-claude-delegate
 
+## 0.6.0
+
+### Minor Changes
+
+- [#5](https://github.com/yorch/pi-claude-delegate/pull/5) [`d38ee0d`](https://github.com/yorch/pi-claude-delegate/commit/d38ee0d80820a883d8b676d9e799f7d24a4b375f) Thanks [@yorch](https://github.com/yorch)! - feat: shim re-export — deprecated wrapper delegates to pi-harness-delegate claude harness
+
 ## 0.5.5
 
 ### Patch Changes
