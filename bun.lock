@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "@yorch/pi-claude-delegate",
+      "dependencies": {
+        "pi-harness-delegate": "^0.2.1",
+      },
       "devDependencies": {
         "@biomejs/biome": "2.5.10",
         "@changesets/changelog-github": "1.0.0",
@@ -373,6 +376,8 @@
     "partial-json": ["partial-json@0.1.7", "", {}, "sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA=="],
 
     "path-key": ["path-key@3.1.1", "", {}, "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q=="],
+
+    "pi-harness-delegate": ["pi-harness-delegate@0.2.2", "", { "peerDependencies": { "@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", "typebox": "*" } }, "sha512-XWtkUBIarenBu06+X2bKs9zF8oH5uh3UUnuugpLKe5Kvfaj9Q8gjTjAmpqeqQjfi5mLx+CU7yf5LOZqz1CEUeg=="],
 
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
