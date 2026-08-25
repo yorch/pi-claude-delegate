@@ -7,18 +7,25 @@ extension that delegates work to the `claude` CLI (Claude Code headless). It
 ships as an npm package (`pi-package` keyword), installable with
 `pi install npm:@yorch/pi-claude-delegate`.
 
+> **Deprecated — use `pi-harness-delegate` for new work.** This repo is kept for compatibility and receives toolchain updates (Bun/Node 26/Biome/changesets) but new features go to `pi-harness-delegate`.
+
 > `CLAUDE.md` is a symlink to `AGENTS.md` — keep them in sync.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `npm run typecheck` | `tsc --noEmit` over `extensions/` (strict, `allowImportingTsExtensions`) |
-| `npm test` | `node --experimental-strip-types --test tests/**/*.test.ts` (14 tests, node:test) |
-| `npm publish --access public` | Publish to npm (scoped → the flag is mandatory) |
+| `bun run typecheck` | `tsc --noEmit` over `extensions/` (strict, `allowImportingTsExtensions`) |
+| `bun test` | `bun test` (14 tests, bun:test — node:test compatible) |
+| `bun run lint` | `biome check .` (2 spaces, 120 cols, single quotes) |
+| `bun run lint:fix` | `biome check --write .` |
+| `bun run verify` | `lint && typecheck && test` — CI and release gate |
+| `bun changeset` | Create a changeset `.md` (commit it); `--empty` for docs/CI-only |
+| `bun run version-packages` | Changesets bump + CHANGELOG (run by release workflow) |
+| `bun run release` | `bun run verify && node scripts/check-packables.mjs && changeset publish` (OIDC) |
 | `pi -e <path> -p "…" --no-tools` | Load the local package as a temporary extension; smoke-tests manifest + factory |
 
-CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
+CI (`.github/workflows/ci.yml`) runs `verify` + `check-packables` + changeset presence on every push/PR. Release (`.github/workflows/release.yml`) is changesets + OIDC trusted publishing — no npm token.
 
 ## Architecture
 
@@ -58,7 +65,7 @@ CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
 
 ## Conventions
 
-- **Tabs**, single quotes, 120-col lines.
+- **2 spaces**, single quotes, 120-col lines — enforced by Biome (`biome.json`: 2 spaces, 120, singleQuote, trailing all). Run `bun run lint:fix` if a diff looks unformatted.
 - TypeScript strict; explicit types on exported functions.
 - Relative imports **must include `.ts`** (`./stream-parse.ts`) — jiti + `allowImportingTsExtensions`.
 - **Templates live as .md files with frontmatter**, never as code strings.
@@ -71,28 +78,39 @@ CI runs typecheck + tests on every push (`.github/workflows/ci.yml`).
 - Scope `"diff"` is resolved in-process via `git diff HEAD` (reliable in plan
   mode); don't rely on Claude running git.
 
-## Release process
+## Release process (changesets + OIDC)
 
-1. Edit → `npm run typecheck && npm test`.
-2. Bump `version` in `package.json` by hand.
-3. Commit + push.
-4. `npm publish --access public`.
-5. `pi update --extensions` on installed machines.
+Changesets + OIDC trusted publishing. No manual `version` bump, no `npm publish`.
 
-Load-test a change: `pi -e <repo path> -p "Reply with exactly: OK" --no-tools`.
-The engine can be exercised without pi:
-`node --experimental-strip-types --input-type=module -e "import {runClaude} from './extensions/run-claude.ts'; …"`.
+1. Edit code → `bun run verify`.
+2. `bun changeset` (or `bun changeset --empty` for docs/CI) → commit `.changeset/*.md`. **Important:** `package.json:files` includes `README.md` (and `templates/`), so even README/docs-only PRs are considered a package change — `ci: Changeset present` (`changeset status --since=origin/main`) will fail without a changeset. For docs-only that should not bump the version, run after `bun install`:
+
+   ```bash
+   bun install
+   ./node_modules/.bin/changeset add --empty   # creates .changeset/*.md with ---/--- (no bump)
+   git add .changeset/*.md && git commit
+   ```
+
+   This satisfies CI with `Packages to be bumped:` empty.
+3. PR → CI checks `changeset status --since=origin/main`.
+4. Merge to `main` → Release workflow opens/updates `chore: version packages` PR (bumps `package.json` + `CHANGELOG.md`).
+5. Review version numbers → Merge Version Packages PR → Release workflow runs `bun run verify && node scripts/check-packables.mjs && changeset publish`, creates tag `vX.Y.Z` pinned to `$GITHUB_SHA` + one GitHub Release, verifies `latest` dist-tag.
+6. On machines with the package installed: `pi update --extensions`.
+
+Load-test a local change: `pi -e <repo path> -p "Reply with exactly: OK" --no-tools`. Engine can be exercised without pi: `bun --input-type=module -e "import {runClaude} from './extensions/run-claude.ts'; …"`.
+
+Load-test the release guard: `node scripts/check-packables.mjs` — must pass; fails on `0.0.0` or empty `extensions/`/`templates/`.
 
 ## Gotchas
 
 - **npm name-similarity guard** forced the scoped name `@yorch/pi-claude-delegate`. Don't rename.
-- **Scoped npm packages default to private** → always `--access public`.
-- **npm CLI auth needs a fresh OTP per publish session**; `npm whoami` succeeding is not enough.
+- **Scoped npm packages default to private** → always `--access public` on first publish (OIDC handles it after).
 - **Registry metadata lags ~2 min after publish** — tarball is live, `npm view` may 404. Wait.
 - **`stream-json` requires `--verbose`** or claude exits 1 with a usage error.
 - **`--no-session-persistence`** keeps delegated runs from littering session files; prompt caching (cache_read tokens) still works.
 - Peer deps are `"*"` (`pi-ai`, `pi-coding-agent`, `pi-tui`, `typebox`) — pi bundles them; never add to `dependencies`.
 - The tarball (`files`) ships `extensions/`, `templates/`, `README.md`, `LICENSE` — tests stay in the repo.
+- **Bun for dev, npm for publish.** CI/release use `bun install`/`bun run` everywhere, but `bun run release` calls `changeset publish` which runs `npm publish --provenance` via npm (OIDC). No npm token in repo — `id-token: write` mints it.
 
 ## Scope notes
 

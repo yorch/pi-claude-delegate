@@ -13,35 +13,37 @@
  */
 
 export interface HintConfig {
-	/** Master switch — false = no hinting at all. */
-	autoDelegateHints: boolean;
+  /** Master switch — false = no hinting at all. */
+  autoDelegateHints: boolean;
 }
 
-const EXPLICIT_MARKER_RE =
-	/(?:^|\s)@claude\b|(?:\b(with|via|using)\s+claude\b)|(?:\bdelegate\b[\s\S]*\bclaude\b)/i;
+const EXPLICIT_MARKER_RE = /(?:^|\s)@claude\b|(?:\b(with|via|using)\s+claude\b)|(?:\bdelegate\b[\s\S]*\bclaude\b)/i;
 
 const KEYWORD_RE = /^\s*(review|plan|audit|security\s*audit|document|implement|write\s+tests?)\b/i;
 
 const HINT_TEXT =
-	"[claude-delegate] The user wants this delegated to Claude Code. " +
-	"Call the claude_delegate tool with a fitting mode (review, plan, security-audit, docs, implement, …) " +
-	"rather than doing the work yourself. Only skip it if delegation is clearly inappropriate.";
+  '[claude-delegate] The user wants this delegated to Claude Code. ' +
+  'Call the claude_delegate tool with a fitting mode (review, plan, security-audit, docs, implement, …) ' +
+  'rather than doing the work yourself. Only skip it if delegation is clearly inappropriate.';
 
 /** Returns the hint to append, or null when the input needs no hint. */
 export function delegationHint(text: string, cfg: HintConfig): string | null {
-	if (!cfg.autoDelegateHints) return null;
+  if (!cfg.autoDelegateHints) return null;
 
-	// already explicit about the tool or command — nothing to add
-	if (/\bclaude_delegate\b|\/claude\b/.test(text)) return null;
+  // already explicit about the tool or command — nothing to add
+  if (/\bclaude_delegate\b|\/claude\b/.test(text)) return null;
 
-	if (EXPLICIT_MARKER_RE.test(text)) return HINT_TEXT;
+  if (EXPLICIT_MARKER_RE.test(text)) return HINT_TEXT;
 
-	if (KEYWORD_RE.test(text)) return HINT_TEXT;
+  if (KEYWORD_RE.test(text)) return HINT_TEXT;
 
-	return null;
+  return null;
 }
 
 /** Remove the `@claude` prefix marker from the text before sending. */
 export function stripMarker(text: string): string {
-	return text.replace(/(?:^|\s)@claude\b/g, " ").replace(/\s{2,}/g, " ").trim();
+  return text
+    .replace(/(?:^|\s)@claude\b/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
