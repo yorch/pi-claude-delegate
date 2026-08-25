@@ -4,6 +4,8 @@
 
 # pi-claude-delegate
 
+[![npm version](https://img.shields.io/npm/v/@yorch/pi-claude-delegate?logo=npm&color=CB3837)](https://www.npmjs.com/package/@yorch/pi-claude-delegate) [![CI](https://github.com/yorch/pi-claude-delegate/actions/workflows/ci.yml/badge.svg)](https://github.com/yorch/pi-claude-delegate/actions/workflows/ci.yml) [![Release](https://github.com/yorch/pi-claude-delegate/actions/workflows/release.yml/badge.svg)](https://github.com/yorch/pi-claude-delegate/actions/workflows/release.yml) [![Node](https://img.shields.io/badge/node-26.x-brightgreen?logo=node.js)](https://nodejs.org) [![Bun](https://img.shields.io/badge/bun-1.3.14-black?logo=bun)](https://bun.sh) [![Biome](https://img.shields.io/badge/Biome-2.5.10-60a5fa)](https://biomejs.dev) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Delegate work to [Claude Code](https://github.com/anthropics/claude-code) from the [pi coding agent](https://github.com/badlogic/pi-mono): code reviews, detailed plans, implementation, security audits, docs — or your own custom templates.
 
 Claude Code runs headless in your repo with a permission mode chosen per task. Results stream back live, and Claude's token/cost usage feeds into pi's footer stats.
@@ -198,9 +200,9 @@ Review what the `claude` CLI is asked to do before granting it broad permissions
 ## Development
 
 ```bash
-npm install
-npm run typecheck
-npm test
+bun install
+bun run typecheck
+bun test
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the release dev-loop. Agents working in this repo should read [AGENTS.md](AGENTS.md).
