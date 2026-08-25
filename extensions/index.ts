@@ -12,7 +12,6 @@ console.warn(
 // Re-export the full harness delegate — existing claude_delegate tool and /claude command
 // continue to work via the compatibility aliases in pi-harness-delegate.
 // This keeps pi-claude-delegate as a thin wrapper so already-installed users are not broken.
-// @ts-ignore — pi-harness-delegate is a runtime dependency, not a peer
 import delegate from 'pi-harness-delegate/extensions/index.ts';
 
 export default delegate;
