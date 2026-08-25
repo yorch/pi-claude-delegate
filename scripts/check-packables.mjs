@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Guard rail for `pi-harness-delegate` (single-package, no dist build).
+// Guard rail for `pi-claude-delegate` (single-package, no dist build).
 // Replicates invariants from colophon/repo-release-process.md §5, adapted for
 // this repo's `files: ["extensions","templates","README.md","LICENSE"]`.
 // - Refuses `0.0.0` placeholder (would permanently point `latest` at 0.0.0 on first publish).

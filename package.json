@@ -32,7 +32,7 @@
     "test": "bun test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "verify": "bun run lint && bun run typecheck && bun test",
+    "verify": "bun run lint && bun run typecheck && bun run test",
     "changeset": "changeset",
     "version-packages": "changeset version && bun install",
     "release": "bun run verify && node scripts/check-packables.mjs && changeset publish"
