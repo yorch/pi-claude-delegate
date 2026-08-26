@@ -1,5 +1,11 @@
 # @yorch/pi-claude-delegate
 
+## 0.6.1
+
+### Patch Changes
+
+- [#7](https://github.com/yorch/pi-claude-delegate/pull/7) [`e7ab0b3`](https://github.com/yorch/pi-claude-delegate/commit/e7ab0b3cced424898d0ff8e02ed05f12cedf657a) Thanks [@yorch](https://github.com/yorch)! - chore: cleanup shim — remove dead extensions and templates, ship only shim re-export
+
 ## 0.6.0
 
 ### Minor Changes

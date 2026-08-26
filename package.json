@@ -1,6 +1,6 @@
 {
   "name": "@yorch/pi-claude-delegate",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "[DEPRECATED] Delegate work to Claude Code — use pi-harness-delegate (pi install npm:pi-harness-delegate) — shim re-exporting claude harness.",
   "type": "module",
   "files": [
